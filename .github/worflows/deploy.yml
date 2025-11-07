@@ -1,0 +1,22 @@
+name: Deploy HorizonMaps
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+      - run: npm ci
+      - name: Inject secrets
+        run: echo "VITE_MAPBOX_API_KEY=${{ secrets.MAPBOX_API_KEY }}" >> .env
+      - run: npm run build
+      - uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
