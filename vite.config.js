@@ -3,5 +3,5 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
-  base: "/HorizonMaps/", // 👈 must match your repo name exactly!
+  base: "./", // ensures GitHub Pages paths resolve correctly
 });
