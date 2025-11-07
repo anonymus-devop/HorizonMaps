@@ -1,12 +1,19 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css";
 
-body {
-  @apply bg-gradient-to-br from-horizonBlue to-horizonViolet text-white;
-  font-family: "Inter", sans-serif;
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  font-family: 'Inter', sans-serif;
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
 }
 
-.glass {
-  @apply bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl shadow-lg;
+button {
+  transition: all 0.3s ease;
+  cursor: pointer;
+}
+
+button:hover {
+  transform: scale(1.05);
 }
