@@ -1,93 +1,70 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
-import "mapbox-gl/dist/mapbox-gl.css";
 
+// ✅ Load Mapbox token from environment
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_API_KEY;
 
 export default function App() {
-  const [map, setMap] = useState(null);
-  const [routeInfo, setRouteInfo] = useState(null);
-  const [aiMessage, setAiMessage] = useState("");
+  const mapContainer = useRef(null);
+  const map = useRef(null);
+  const [lng, setLng] = useState(-73.935242);
+  const [lat, setLat] = useState(40.73061);
+  const [zoom, setZoom] = useState(11);
+  const [aiResponse, setAiResponse] = useState("");
 
+  // Initialize Mapbox only once
   useEffect(() => {
-    const m = new mapboxgl.Map({
-      container: "map",
+    if (map.current) return;
+    map.current = new mapboxgl.Map({
+      container: mapContainer.current,
       style: "mapbox://styles/mapbox/streets-v12",
-      center: [-74.006, 40.7128],
-      zoom: 13,
+      center: [lng, lat],
+      zoom: zoom,
     });
-    setMap(m);
-    return () => m.remove();
+
+    new mapboxgl.Marker().setLngLat([lng, lat]).addTo(map.current);
   }, []);
 
-  async function getRoute(start, end) {
-    const url = `https://api.mapbox.com/directions/v5/mapbox/walking/${start[0]},${start[1]};${end[0]},${end[1]}?geometries=geojson&access_token=${mapboxgl.accessToken}`;
-    const res = await fetch(url);
-    const data = await res.json();
-    const route = data.routes[0].geometry;
+  // 🔮 Ask AI for an inclusive description of a route
+  async function handleAiAnalysis() {
+    setAiResponse("Thinking inclusively... 💭");
 
-    if (map.getSource("route")) {
-      map.getSource("route").setData(route);
-    } else {
-      map.addSource("route", { type: "geojson", data: route });
-      map.addLayer({
-        id: "route",
-        type: "line",
-        source: "route",
-        layout: { "line-join": "round", "line-cap": "round" },
-        paint: { "line-color": "#8e2de2", "line-width": 5 },
-      });
-    }
-
-    setRouteInfo(data.routes[0]);
-    analyzeRouteWithAI(data.routes[0]);
-  }
-
-  async function analyzeRouteWithAI(route) {
-    setAiMessage("Analyzing route for accessibility...");
     try {
-      const res = await fetch("https://YOUR_WORKER_URL.workers.dev/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt: `You are an accessibility advisor. Based on a walking route of ${route.distance} meters and ${route.duration} seconds, describe its inclusivity and accessibility for all people.`,
-        }),
-      });
-      const data = await res.json();
-      setAiMessage(data.message || "No AI response.");
-    } catch (e) {
-      setAiMessage("Error connecting to AI.");
-    }
-  }
+      const prompt = "Suggest an inclusive walking route in this area.";
+      const res = await fetch(
+        "https://horizonmaps-ai.jerixortixdev.workers.dev/chat",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt }),
+        }
+      );
 
-  function handleRoute() {
-    const start = [-74.006, 40.7128];
-    const end = [-74.001, 40.722];
-    getRoute(start, end);
+      const data = await res.json();
+      setAiResponse(data.message || "No AI response");
+    } catch (err) {
+      setAiResponse("⚠️ Error connecting to AI service.");
+      console.error(err);
+    }
   }
 
   return (
-    <div className="p-6 min-h-screen">
-      <h1 className="text-4xl font-bold mb-4">HorizonMaps 🌈</h1>
-      <p className="mb-4 text-gray-200">
-        Explore accessible and inclusive routes powered by Mapbox and ChatGPT.
-      </p>
+    <div className="h-screen w-screen flex flex-col bg-gradient-to-br from-blue-500 to-violet-700 text-white font-sans">
+      {/* Map */}
+      <div ref={mapContainer} className="flex-1 rounded-2xl m-2 shadow-lg" />
 
+      {/* AI Button */}
       <button
-        onClick={handleRoute}
-        className="px-6 py-2 bg-white text-black rounded-lg font-semibold hover:bg-gray-200"
+        onClick={handleAiAnalysis}
+        className="m-4 p-3 text-lg rounded-2xl bg-white/20 backdrop-blur-md hover:bg-white/30"
       >
-        Generate Route with AI Analysis
+        🌈 Get Inclusive Route Analysis
       </button>
 
-      <div id="map" className="w-full h-[500px] my-6 rounded-2xl shadow-lg" />
-
-      {aiMessage && (
-        <div className="glass p-4">
-          <h2 className="text-xl font-semibold mb-2">AI Accessibility Insights</h2>
-          <p>{aiMessage}</p>
-        </div>
-      )}
+      {/* AI Response */}
+      <div className="m-4 p-3 bg-white/10 rounded-2xl backdrop-blur-md min-h-[100px]">
+        {aiResponse}
+      </div>
     </div>
   );
 }
