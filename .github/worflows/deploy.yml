@@ -2,7 +2,7 @@ name: 🚀 Deploy HorizonMaps to GitHub Pages
 
 on:
   push:
-    branches: [ main ]  # Deploy automatically when you push to main
+    branches: [ main ]
 
 permissions:
   contents: read
