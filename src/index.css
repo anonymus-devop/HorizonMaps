@@ -1,19 +1,11 @@
-@import "https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 html,
 body,
 #root {
   height: 100%;
   margin: 0;
-  font-family: 'Inter', sans-serif;
-  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
-}
-
-button {
-  transition: all 0.3s ease;
-  cursor: pointer;
-}
-
-button:hover {
-  transform: scale(1.05);
+  padding: 0;
 }
