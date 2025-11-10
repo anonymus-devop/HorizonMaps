@@ -28,10 +28,12 @@ jobs:
       - name: 📦 Install dependencies
         run: npm install
 
-      - name: 🏗️ Build project
-        run: npm run build
       - name: Install MapBox
         run: npm install mapbox-gl
+
+      - name: 🏗️ Build project
+        run: npm run build
+      
 
       - name: 🚫 Disable Jekyll
         run: echo "" > dist/.nojekyll
