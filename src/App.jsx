@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
-
 // ✅ Load Mapbox token from environment
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_API_KEY;
 
