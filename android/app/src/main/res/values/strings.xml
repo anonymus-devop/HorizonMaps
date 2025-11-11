@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">horizonmaps</string>
+    <string name="title_activity_main">horizonmaps</string>
+    <string name="package_name">com.horizonmaps.cs</string>
+    <string name="custom_url_scheme">com.horizonmaps.cs</string>
+</resources>
