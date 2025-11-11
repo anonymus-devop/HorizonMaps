@@ -7,88 +7,128 @@ mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 export default function App() {
   const mapContainer = useRef(null);
   const map = useRef(null);
-
   const [origin, setOrigin] = useState("");
   const [destination, setDestination] = useState("");
   const [suggestions, setSuggestions] = useState([]);
   const [route, setRoute] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
+  const [userMarker, setUserMarker] = useState(null);
   const [navigating, setNavigating] = useState(false);
   const geolocateControl = useRef(null);
 
-  // --- Initialize Map
+  // --- Initialize map
   useEffect(() => {
     if (map.current) return;
 
     map.current = new mapboxgl.Map({
       container: mapContainer.current,
       style: "mapbox://styles/mapbox/navigation-day-v1",
-      center: [-74.08175, 4.60971], // Bogotá default
-      zoom: 11,
+      center: [-74.08175, 4.60971], // Bogotá by default
+      zoom: 12,
     });
 
     map.current.addControl(new mapboxgl.NavigationControl(), "top-right");
 
-    // --- Add Mapbox GeolocateControl (better than navigator.geolocation)
+    // GeolocateControl (with automatic start)
     geolocateControl.current = new mapboxgl.GeolocateControl({
       positionOptions: { enableHighAccuracy: true },
       trackUserLocation: true,
-      showAccuracyCircle: true,
-      showUserHeading: true,
-      fitBoundsOptions: { maxZoom: 14 },
+      showAccuracyCircle: false,
     });
 
     map.current.addControl(geolocateControl.current, "top-right");
 
-    // Automatically update user location
     map.current.on("load", () => {
-      geolocateControl.current.trigger(); // start locating immediately
+      geolocateControl.current.trigger();
     });
 
+    // When user location updates
     geolocateControl.current.on("geolocate", (pos) => {
       const coords = [pos.coords.longitude, pos.coords.latitude];
       setUserLocation(coords);
       setOrigin("Mi ubicación");
+
+      // Custom animated marker
+      if (userMarker) {
+        userMarker.setLngLat(coords);
+      } else {
+        const markerEl = document.createElement("div");
+        markerEl.className = "user-marker";
+        userMarkerRef(markerEl); // attach CSS below
+        const newMarker = new mapboxgl.Marker(markerEl)
+          .setLngLat(coords)
+          .addTo(map.current);
+        setUserMarker(newMarker);
+      }
+
+      // Center map on user
+      map.current.flyTo({ center: coords, zoom: 15, essential: true });
     });
   }, []);
 
-  // --- Suggestion logic for Colombian places
+  // --- Suggestion logic
   const handleSuggest = async (query, setValue) => {
     setValue(query);
-    if (query.length < 3) return;
+    if (query.trim().length < 2) {
+      setSuggestions([]);
+      return;
+    }
 
-    const response = await fetch(
-      `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
-        query
-      )}.json?country=CO&access_token=${mapboxgl.accessToken}`
-    );
-    const data = await response.json();
+    try {
+      const res = await fetch(
+        `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
+          query
+        )}.json?country=CO&autocomplete=true&access_token=${mapboxgl.accessToken}`
+      );
+      const data = await res.json();
 
-    const results = data.features.map((f) => ({
-      name: f.place_name,
-      coords: f.center,
-    }));
+      const nearUser =
+        userLocation &&
+        (await fetch(
+          `https://api.mapbox.com/geocoding/v5/mapbox.places/poi.json?proximity=${userLocation.join(
+            ","
+          )}&country=CO&limit=5&access_token=${mapboxgl.accessToken}`
+        ).then((r) => r.json()));
 
-    const majorPlaces = [
-      "Bogotá",
-      "Medellín",
-      "Cali",
-      "Barranquilla",
-      "Cartagena",
-      "Bucaramanga",
-      "Manizales",
-      "Pereira",
-      "Santa Marta",
-    ];
+      const mapboxResults = data.features.map((f) => ({
+        name: f.place_name,
+        coords: f.center,
+      }));
 
-    const combined = [
-      ...majorPlaces
+      const nearbyResults = nearUser
+        ? nearUser.features.map((f) => ({
+            name: f.text,
+            coords: f.center,
+          }))
+        : [];
+
+      // Add major Colombian cities manually (weighted)
+      const majorCities = [
+        "Bogotá",
+        "Medellín",
+        "Cali",
+        "Barranquilla",
+        "Cartagena",
+        "Bucaramanga",
+        "Manizales",
+        "Pereira",
+        "Santa Marta",
+        "Cúcuta",
+        "Villavicencio",
+      ]
         .filter((p) => p.toLowerCase().includes(query.toLowerCase()))
-        .map((p) => ({ name: p, coords: null })),
-      ...results,
-    ];
+        .map((p) => ({ name: p, coords: null }));
 
-    setSuggestions(combined.slice(0, 6));
+      const combined = [
+        ...majorCities,
+        ...mapboxResults,
+        ...nearbyResults,
+      ].slice(0, 8);
+
+      setSuggestions(combined);
+    } catch (err) {
+      console.error("Error getting suggestions:", err);
+    }
   };
 
   // --- Route planner
@@ -101,7 +141,7 @@ export default function App() {
     let originCoords;
     let destCoords;
 
-    // Determine origin
+    // Use user location if available
     if (origin === "Mi ubicación" && userLocation) {
       originCoords = userLocation;
     } else {
@@ -114,7 +154,6 @@ export default function App() {
       originCoords = data.features[0]?.center;
     }
 
-    // Determine destination
     const geo2 = await fetch(
       `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
         destination
@@ -128,7 +167,6 @@ export default function App() {
       return;
     }
 
-    // Request route
     const res = await fetch(
       `https://api.mapbox.com/directions/v5/mapbox/driving/${originCoords.join(
         ","
@@ -140,12 +178,12 @@ export default function App() {
 
     const routeData = json.routes[0];
     const coords = routeData.geometry.coordinates;
+
     const geojson = {
       type: "Feature",
       geometry: { type: "LineString", coordinates: coords },
     };
 
-    // Render route on map
     if (map.current.getSource("route")) {
       map.current.getSource("route").setData(geojson);
     } else {
@@ -159,21 +197,22 @@ export default function App() {
       });
     }
 
-    // Zoom to fit route
-    const bounds = coords.reduce(
-      (b, coord) => b.extend(coord),
-      new mapboxgl.LngLatBounds(coords[0], coords[0])
+    map.current.fitBounds(
+      coords.reduce(
+        (b, c) => b.extend(c),
+        new mapboxgl.LngLatBounds(coords[0], coords[0])
+      ),
+      { padding: 50 }
     );
-    map.current.fitBounds(bounds, { padding: 50 });
 
     setRoute(routeData);
   };
 
-  // --- Navigation mode
+  // --- Start navigation
   const startNavigation = () => {
     if (!route) return alert("Primero planifica una ruta.");
     setNavigating(true);
-    alert("🚗 Navegación iniciada. Sigue las instrucciones en el mapa.");
+    alert("🚗 Navegación iniciada — sigue la ruta en tiempo real.");
   };
 
   return (
@@ -187,14 +226,14 @@ export default function App() {
             placeholder="Origen (o 'Mi ubicación')"
             value={origin}
             onChange={(e) => handleSuggest(e.target.value, setOrigin)}
-            list="suggestions-origin"
+            list="origin-suggestions"
           />
           <input
             className="p-2 rounded-lg bg-white/20 placeholder-gray-300"
             placeholder="Destino"
             value={destination}
             onChange={(e) => handleSuggest(e.target.value, setDestination)}
-            list="suggestions-dest"
+            list="dest-suggestions"
           />
           <button
             onClick={planRoute}
@@ -209,22 +248,38 @@ export default function App() {
             🚗 Iniciar navegación
           </button>
         </div>
-
-        {/* Datalists */}
-        <datalist id="suggestions-origin">
-          {suggestions.map((s, i) => (
-            <option key={i} value={s.name} />
-          ))}
-        </datalist>
-        <datalist id="suggestions-dest">
-          {suggestions.map((s, i) => (
-            <option key={i} value={s.name} />
-          ))}
-        </datalist>
       </div>
 
-      {/* Map container */}
+      <datalist id="origin-suggestions">
+        {suggestions.map((s, i) => (
+          <option key={i} value={s.name} />
+        ))}
+      </datalist>
+      <datalist id="dest-suggestions">
+        {suggestions.map((s, i) => (
+          <option key={i} value={s.name} />
+        ))}
+      </datalist>
+
+      {/* Map */}
       <div ref={mapContainer} className="flex-1" />
+
+      {/* Liquid-glass animated user cursor */}
+      <style>{`
+        .user-marker {
+          width: 22px;
+          height: 22px;
+          border-radius: 50%;
+          background: radial-gradient(circle at 30% 30%, #00f5ff, #0077ff);
+          box-shadow: 0 0 12px rgba(0, 255, 255, 0.8);
+          border: 2px solid rgba(255,255,255,0.8);
+          animation: pulse 1.6s infinite alternate;
+        }
+        @keyframes pulse {
+          0% { transform: scale(0.9); opacity: 0.9; }
+          100% { transform: scale(1.3); opacity: 0.7; }
+        }
+      `}</style>
     </div>
   );
 }
