@@ -19,6 +19,8 @@ export default function App() {
   const [currentStep, setCurrentStep] = useState(0);
   const [isNavigating, setIsNavigating] = useState(false);
   const markerRef = useRef(null);
+  const [destSuggestions, setDestSuggestions] = useState([]);
+  const [userPosition, setUserPosition] = useState(null);
 
   // --- Initialize map ---
   useEffect(() => {
@@ -42,6 +44,26 @@ export default function App() {
     if (!data.features.length) return null;
     const [lng, lat] = data.features[0].center;
     return { lng, lat };
+  };
+
+  // --- Fetch nearby place suggestions ---
+  const fetchSuggestions = async (query) => {
+    if (!query.trim()) {
+      setDestSuggestions([]);
+      return;
+    }
+
+    let proximity = "";
+    if (userPosition) {
+      proximity = `&proximity=${userPosition.lng},${userPosition.lat}`;
+    }
+
+    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
+      query
+    )}.json?access_token=${mapboxgl.accessToken}&autocomplete=true&limit=5${proximity}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    setDestSuggestions(data.features);
   };
 
   // --- Fetch and render route ---
@@ -111,6 +133,7 @@ export default function App() {
     setOrigin(from);
     setDestination(to);
     getRoute(from, to);
+    setDestSuggestions([]); // clear after choosing
   };
 
   // --- Step-by-step navigation logic ---
@@ -126,7 +149,6 @@ export default function App() {
     const nextStep = currentStep + 1;
     const [lng, lat] = steps[nextStep].location;
 
-    // Animate camera
     map.current.flyTo({
       center: [lng, lat],
       zoom: 15,
@@ -135,7 +157,6 @@ export default function App() {
       essential: true,
     });
 
-    // Move the navigation marker
     if (markerRef.current) {
       markerRef.current.setLngLat([lng, lat]);
     }
@@ -155,6 +176,7 @@ export default function App() {
           lng: pos.coords.longitude,
           lat: pos.coords.latitude,
         };
+        setUserPosition(coords);
         setOrigin(coords);
         setOriginQuery("My Location");
         new mapboxgl.Marker({ color: "#00ffcc" })
@@ -185,6 +207,7 @@ export default function App() {
       markerRef.current.remove();
       markerRef.current = null;
     }
+    setDestSuggestions([]);
   };
 
   return (
@@ -204,12 +227,37 @@ export default function App() {
           placeholder="Enter origin (e.g. Bogotá)"
           className="w-full px-3 py-2 rounded-xl bg-white/20 text-white placeholder-gray-300 focus:outline-none"
         />
-        <input
-          value={destQuery}
-          onChange={(e) => setDestQuery(e.target.value)}
-          placeholder="Enter destination (e.g. Medellín)"
-          className="w-full px-3 py-2 rounded-xl bg-white/20 text-white placeholder-gray-300 focus:outline-none"
-        />
+
+        <div className="relative">
+          <input
+            value={destQuery}
+            onChange={(e) => {
+              setDestQuery(e.target.value);
+              fetchSuggestions(e.target.value);
+            }}
+            placeholder="Enter destination (e.g. Medellín)"
+            className="w-full px-3 py-2 rounded-xl bg-white/20 text-white placeholder-gray-300 focus:outline-none"
+          />
+          {destSuggestions.length > 0 && (
+            <ul className="absolute z-10 bg-black/70 backdrop-blur-xl w-full mt-1 rounded-xl max-h-40 overflow-auto border border-white/10">
+              {destSuggestions.map((place) => (
+                <li
+                  key={place.id}
+                  onClick={() => {
+                    setDestQuery(place.place_name);
+                    setDestSuggestions([]);
+                  }}
+                  className="px-3 py-2 hover:bg-white/20 cursor-pointer text-sm"
+                >
+                  {place.text}{" "}
+                  <span className="text-gray-400 text-xs">
+                    {place.context?.[0]?.text || ""}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
 
         <div className="flex flex-col space-y-2 mt-2">
           <button
