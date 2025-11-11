@@ -34,11 +34,71 @@ export default function App() {
     map.current.addControl(new mapboxgl.NavigationControl(), "top-right");
   }, []);
 
-  // --- Geocode text to coordinates ---
-  const geocode = async (query) => {
+  // --- Predefined major Colombian locations ---
+  const majorColombianPlaces = [
+    { name: "Bogotá", coords: [-74.08175, 4.60971] },
+    { name: "Medellín", coords: [-75.56359, 6.25184] },
+    { name: "Cali", coords: [-76.5307, 3.43722] },
+    { name: "Cartagena", coords: [-75.51444, 10.39972] },
+    { name: "Barranquilla", coords: [-74.79639, 10.96389] },
+    { name: "Santa Marta", coords: [-74.195, 11.2408] },
+    { name: "Bucaramanga", coords: [-73.1198, 7.12539] },
+    { name: "Pereira", coords: [-75.6961, 4.81333] },
+    { name: "Manizales", coords: [-75.5183, 5.0703] },
+  ];
+
+  // --- Suggest logic: prioritize Colombian places ---
+  const fetchSuggestions = async (query) => {
+    if (!query.trim()) {
+      setDestSuggestions([]);
+      return;
+    }
+
+    // Filter predefined Colombian cities first
+    const localMatches = majorColombianPlaces.filter((place) =>
+      place.name.toLowerCase().includes(query.toLowerCase())
+    );
+
+    let suggestions = localMatches.map((p) => ({
+      id: p.name,
+      place_name: p.name + ", Colombia",
+      center: p.coords,
+      type: "local",
+    }));
+
+    // Fallback: Mapbox suggestions near user location
+    let proximity = "";
+    if (userPosition)
+      proximity = `&proximity=${userPosition.lng},${userPosition.lat}`;
+
     const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
       query
-    )}.json?access_token=${mapboxgl.accessToken}&limit=1`;
+    )}.json?access_token=${mapboxgl.accessToken}&autocomplete=true&limit=5&country=CO${proximity}`;
+    const res = await fetch(url);
+    const data = await res.json();
+
+    const mapboxSuggestions = data.features.map((f) => ({
+      id: f.id,
+      place_name: f.place_name,
+      center: f.center,
+      type: "mapbox",
+    }));
+
+    // Merge Colombian + Mapbox suggestions
+    suggestions = [...suggestions, ...mapboxSuggestions];
+    setDestSuggestions(suggestions);
+  };
+
+  // --- Geocode text to coordinates ---
+  const geocode = async (query) => {
+    const local = majorColombianPlaces.find(
+      (p) => p.name.toLowerCase() === query.toLowerCase()
+    );
+    if (local) return { lng: local.coords[0], lat: local.coords[1] };
+
+    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
+      query
+    )}.json?access_token=${mapboxgl.accessToken}&limit=1&country=CO`;
     const res = await fetch(url);
     const data = await res.json();
     if (!data.features.length) return null;
@@ -46,31 +106,16 @@ export default function App() {
     return { lng, lat };
   };
 
-  // --- Fetch nearby place suggestions ---
-  const fetchSuggestions = async (query) => {
-    if (!query.trim()) {
-      setDestSuggestions([]);
-      return;
-    }
-
-    let proximity = "";
-    if (userPosition) {
-      proximity = `&proximity=${userPosition.lng},${userPosition.lat}`;
-    }
-
-    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
-      query
-    )}.json?access_token=${mapboxgl.accessToken}&autocomplete=true&limit=5${proximity}`;
-    const res = await fetch(url);
-    const data = await res.json();
-    setDestSuggestions(data.features);
-  };
-
-  // --- Fetch and render route ---
+  // --- Get and draw route ---
   const getRoute = async (from, to) => {
     const query = `https://api.mapbox.com/directions/v5/mapbox/driving/${from.lng},${from.lat};${to.lng},${to.lat}?steps=true&geometries=geojson&overview=full&access_token=${mapboxgl.accessToken}`;
     const res = await fetch(query);
     const data = await res.json();
+
+    if (!data.routes || !data.routes.length) {
+      alert("⚠️ No route found. Try another location.");
+      return;
+    }
 
     const routeCoords = data.routes[0].geometry.coordinates;
     const routeSteps = data.routes[0].legs[0].steps.map((s) => ({
@@ -80,8 +125,8 @@ export default function App() {
 
     setRoute(routeCoords);
     setSteps(routeSteps);
+    setCurrentStep(0);
 
-    // Draw line
     if (map.current.getSource("route")) {
       map.current.removeLayer("route");
       map.current.removeSource("route");
@@ -107,6 +152,13 @@ export default function App() {
       },
     });
 
+    // --- Add the liquid glass cursor ---
+    const el = document.createElement("div");
+    el.className =
+      "liquid-marker w-6 h-6 rounded-full bg-gradient-to-tr from-cyan-300 to-blue-400 opacity-90 shadow-lg border border-white/30 animate-pulse";
+    const marker = new mapboxgl.Marker({ element: el }).setLngLat([from.lng, from.lat]).addTo(map.current);
+    markerRef.current = marker;
+
     map.current.fitBounds(
       [
         [from.lng, from.lat],
@@ -114,29 +166,22 @@ export default function App() {
       ],
       { padding: 60 }
     );
-
-    // Add a movable marker for navigation
-    if (markerRef.current) markerRef.current.remove();
-    markerRef.current = new mapboxgl.Marker({ color: "aqua" })
-      .setLngLat([from.lng, from.lat])
-      .addTo(map.current);
   };
 
-  // --- Handle route planning ---
+  // --- Plan route ---
   const handleFindPlaces = async () => {
-    const from = await geocode(originQuery);
+    const from = originQuery === "My Location" && userPosition ? userPosition : await geocode(originQuery);
     const to = await geocode(destQuery);
     if (!from || !to) {
-      alert("Couldn't find one of the locations.");
+      alert("❌ Couldn't find one of the locations.");
       return;
     }
     setOrigin(from);
     setDestination(to);
-    getRoute(from, to);
-    setDestSuggestions([]); // clear after choosing
+    await getRoute(from, to);
   };
 
-  // --- Step-by-step navigation logic ---
+  // --- Navigate logic ---
   const handleNavigate = () => {
     if (!steps.length) return alert("No route loaded.");
     if (currentStep >= steps.length - 1) {
@@ -149,27 +194,14 @@ export default function App() {
     const nextStep = currentStep + 1;
     const [lng, lat] = steps[nextStep].location;
 
-    map.current.flyTo({
-      center: [lng, lat],
-      zoom: 15,
-      speed: 0.7,
-      curve: 1.4,
-      essential: true,
-    });
-
-    if (markerRef.current) {
-      markerRef.current.setLngLat([lng, lat]);
-    }
-
+    map.current.flyTo({ center: [lng, lat], zoom: 15, speed: 0.8, curve: 1.3 });
+    markerRef.current.setLngLat([lng, lat]);
     setCurrentStep(nextStep);
   };
 
-  // --- Locate current user as origin ---
+  // --- Locate current position ---
   const handleLocate = () => {
-    if (!navigator.geolocation) {
-      alert("Geolocation not supported on this device.");
-      return;
-    }
+    if (!navigator.geolocation) return alert("Geolocation not supported.");
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const coords = {
@@ -179,13 +211,15 @@ export default function App() {
         setUserPosition(coords);
         setOrigin(coords);
         setOriginQuery("My Location");
+
         new mapboxgl.Marker({ color: "#00ffcc" })
           .setLngLat([coords.lng, coords.lat])
-          .setPopup(new mapboxgl.Popup().setText("You are here"))
+          .setPopup(new mapboxgl.Popup().setText("📍 You are here"))
           .addTo(map.current);
+
         map.current.flyTo({ center: [coords.lng, coords.lat], zoom: 14 });
       },
-      () => alert("Location access denied.")
+      () => alert("Permission denied.")
     );
   };
 
@@ -195,36 +229,30 @@ export default function App() {
       map.current.removeLayer("route");
       map.current.removeSource("route");
     }
-    setRoute([]);
     setSteps([]);
+    setRoute([]);
     setCurrentStep(0);
-    setOrigin(null);
-    setDestination(null);
-    setOriginQuery("");
-    setDestQuery("");
     setIsNavigating(false);
     if (markerRef.current) {
       markerRef.current.remove();
       markerRef.current = null;
     }
-    setDestSuggestions([]);
   };
 
   return (
     <div className="h-screen w-screen relative overflow-hidden">
       <div ref={mapContainer} className="absolute inset-0" />
 
-      {/* Glass UI */}
-      <div className="absolute top-4 left-4 space-y-3 p-4 rounded-3xl bg-white/15 backdrop-blur-xl shadow-2xl text-white border border-white/20 w-80">
-        <h1 className="text-2xl font-semibold">🚗 HorizonMaps</h1>
+      <div className="absolute top-4 left-4 p-4 w-80 rounded-3xl bg-white/15 backdrop-blur-2xl text-white border border-white/20 shadow-2xl space-y-3">
+        <h1 className="text-2xl font-bold">🌍 HorizonMaps</h1>
         <p className="text-xs text-blue-100">
-          Plan, explore, and navigate routes in real time.
+          Plan routes, navigate, and explore Colombia.
         </p>
 
         <input
           value={originQuery}
           onChange={(e) => setOriginQuery(e.target.value)}
-          placeholder="Enter origin (e.g. Bogotá)"
+          placeholder="Origin (e.g. Bogotá)"
           className="w-full px-3 py-2 rounded-xl bg-white/20 text-white placeholder-gray-300 focus:outline-none"
         />
 
@@ -235,7 +263,7 @@ export default function App() {
               setDestQuery(e.target.value);
               fetchSuggestions(e.target.value);
             }}
-            placeholder="Enter destination (e.g. Medellín)"
+            placeholder="Destination (e.g. Medellín)"
             className="w-full px-3 py-2 rounded-xl bg-white/20 text-white placeholder-gray-300 focus:outline-none"
           />
           {destSuggestions.length > 0 && (
@@ -249,17 +277,14 @@ export default function App() {
                   }}
                   className="px-3 py-2 hover:bg-white/20 cursor-pointer text-sm"
                 >
-                  {place.text}{" "}
-                  <span className="text-gray-400 text-xs">
-                    {place.context?.[0]?.text || ""}
-                  </span>
+                  {place.place_name}
                 </li>
               ))}
             </ul>
           )}
         </div>
 
-        <div className="flex flex-col space-y-2 mt-2">
+        <div className="flex flex-col space-y-2">
           <button
             onClick={handleFindPlaces}
             className="bg-blue-600 hover:bg-blue-700 py-2 rounded-xl transition"
@@ -273,7 +298,7 @@ export default function App() {
             className={`py-2 rounded-xl transition ${
               steps.length
                 ? "bg-green-600 hover:bg-green-700"
-                : "bg-gray-500 cursor-not-allowed"
+                : "bg-gray-600 cursor-not-allowed"
             }`}
           >
             {isNavigating ? "➡️ Next Step" : "🧭 Start Navigation"}
@@ -294,7 +319,6 @@ export default function App() {
           </button>
         </div>
 
-        {/* Step instructions */}
         {steps.length > 0 && (
           <div className="mt-3 text-xs bg-white/10 rounded-xl p-2 max-h-28 overflow-auto border border-white/20">
             <p className="font-semibold mb-1 text-blue-200">
@@ -314,9 +338,8 @@ export default function App() {
         )}
       </div>
 
-      {/* Footer */}
       <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-white/10 backdrop-blur-2xl border border-white/20 px-6 py-3 rounded-full shadow-lg text-white text-sm">
-        HorizonMaps © 2025 — Powered by Mapbox GL
+        HorizonMaps © 2025 — Smart Colombian Navigation
       </div>
     </div>
   );
