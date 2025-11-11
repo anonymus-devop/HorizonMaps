@@ -3,14 +3,14 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
-  base: "/HorizonMaps/", // 👈 Important for GitHub Pages (repo name)
+  base: "/HorizonMaps/",
   optimizeDeps: {
-    include: ["mapbox-gl", "@turf/turf"],
+    include: ["mapbox-gl", "@turf/turf", "raf"],
   },
   build: {
     outDir: "dist",
     rollupOptions: {
-      external: [], // Fixes Rollup external error
+      external: [],
     },
     commonjsOptions: {
       transformMixedEsModules: true,
