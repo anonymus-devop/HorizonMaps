@@ -29,6 +29,7 @@ jobs:
           npm cache clean --force
           npm install
           npm install @turf/turf mapbox-gl raf
+          npm install -g @bubblewrap/cli
       - name: Install MapBox
         run: npm install mapbox-gl
       - name: Build project
