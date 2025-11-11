@@ -14,46 +14,45 @@ export default function App() {
   const [route, setRoute] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
   const [navigating, setNavigating] = useState(false);
+  const geolocateControl = useRef(null);
 
-  // --- Load map
+  // --- Initialize Map
   useEffect(() => {
     if (map.current) return;
+
     map.current = new mapboxgl.Map({
       container: mapContainer.current,
       style: "mapbox://styles/mapbox/navigation-day-v1",
-      center: [-74.08175, 4.60971], // Bogotá
+      center: [-74.08175, 4.60971], // Bogotá default
       zoom: 11,
     });
 
-    // Add zoom & rotation controls
     map.current.addControl(new mapboxgl.NavigationControl(), "top-right");
+
+    // --- Add Mapbox GeolocateControl (better than navigator.geolocation)
+    geolocateControl.current = new mapboxgl.GeolocateControl({
+      positionOptions: { enableHighAccuracy: true },
+      trackUserLocation: true,
+      showAccuracyCircle: true,
+      showUserHeading: true,
+      fitBoundsOptions: { maxZoom: 14 },
+    });
+
+    map.current.addControl(geolocateControl.current, "top-right");
+
+    // Automatically update user location
+    map.current.on("load", () => {
+      geolocateControl.current.trigger(); // start locating immediately
+    });
+
+    geolocateControl.current.on("geolocate", (pos) => {
+      const coords = [pos.coords.longitude, pos.coords.latitude];
+      setUserLocation(coords);
+      setOrigin("Mi ubicación");
+    });
   }, []);
 
-  // --- Handle user geolocation
-  const locateUser = () => {
-    if (!navigator.geolocation) {
-      alert("Geolocation not supported by your browser.");
-      return;
-    }
-
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const { latitude, longitude } = pos.coords;
-        setUserLocation([longitude, latitude]);
-        map.current.flyTo({ center: [longitude, latitude], zoom: 14 });
-
-        // Add marker for user
-        new mapboxgl.Marker({ color: "#00BFFF" })
-          .setLngLat([longitude, latitude])
-          .setPopup(new mapboxgl.Popup().setText("Mi ubicación actual"))
-          .addTo(map.current);
-      },
-      (err) => alert("Error getting location: " + err.message),
-      { enableHighAccuracy: true }
-    );
-  };
-
-  // --- Suggestion logic (Colombia + Mapbox Geocoding)
+  // --- Suggestion logic for Colombian places
   const handleSuggest = async (query, setValue) => {
     setValue(query);
     if (query.length < 3) return;
@@ -64,12 +63,12 @@ export default function App() {
       )}.json?country=CO&access_token=${mapboxgl.accessToken}`
     );
     const data = await response.json();
+
     const results = data.features.map((f) => ({
       name: f.place_name,
       coords: f.center,
     }));
 
-    // Prioritize major Colombian cities
     const majorPlaces = [
       "Bogotá",
       "Medellín",
@@ -92,17 +91,17 @@ export default function App() {
     setSuggestions(combined.slice(0, 6));
   };
 
-  // --- Route planning
+  // --- Route planner
   const planRoute = async () => {
     if (!origin || !destination) {
       alert("Por favor selecciona origen y destino.");
       return;
     }
 
-    let originCoords = null;
-    let destCoords = null;
+    let originCoords;
+    let destCoords;
 
-    // Get origin coords
+    // Determine origin
     if (origin === "Mi ubicación" && userLocation) {
       originCoords = userLocation;
     } else {
@@ -115,7 +114,7 @@ export default function App() {
       originCoords = data.features[0]?.center;
     }
 
-    // Get destination coords
+    // Determine destination
     const geo2 = await fetch(
       `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
         destination
@@ -129,6 +128,7 @@ export default function App() {
       return;
     }
 
+    // Request route
     const res = await fetch(
       `https://api.mapbox.com/directions/v5/mapbox/driving/${originCoords.join(
         ","
@@ -145,6 +145,7 @@ export default function App() {
       geometry: { type: "LineString", coordinates: coords },
     };
 
+    // Render route on map
     if (map.current.getSource("route")) {
       map.current.getSource("route").setData(geojson);
     } else {
@@ -154,11 +155,11 @@ export default function App() {
         type: "line",
         source: "route",
         layout: { "line-cap": "round", "line-join": "round" },
-        paint: { "line-color": "#4CAF50", "line-width": 5 },
+        paint: { "line-color": "#00ffae", "line-width": 5 },
       });
     }
 
-    // Zoom to route
+    // Zoom to fit route
     const bounds = coords.reduce(
       (b, coord) => b.extend(coord),
       new mapboxgl.LngLatBounds(coords[0], coords[0])
@@ -168,7 +169,7 @@ export default function App() {
     setRoute(routeData);
   };
 
-  // --- Simulate navigation
+  // --- Navigation mode
   const startNavigation = () => {
     if (!route) return alert("Primero planifica una ruta.");
     setNavigating(true);
@@ -207,15 +208,9 @@ export default function App() {
           >
             🚗 Iniciar navegación
           </button>
-          <button
-            onClick={locateUser}
-            className="bg-cyan-500 hover:bg-cyan-600 text-white px-3 py-2 rounded-xl"
-          >
-            📡 Mi ubicación
-          </button>
         </div>
 
-        {/* Suggestions datalist */}
+        {/* Datalists */}
         <datalist id="suggestions-origin">
           {suggestions.map((s, i) => (
             <option key={i} value={s.name} />
