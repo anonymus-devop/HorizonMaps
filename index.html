@@ -1,15 +1,20 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HorizonMaps</title>
-    <link rel="icon" type="image/png" href="./favicon.png" />
-  </head>
-  <body class="bg-gradient-to-br from-blue-600 to-violet-800 text-white">
-    <div id="root"></div>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#1e40af" />
 
-    <!-- Correct relative path -->
-    <script type="module" src="./src/main.jsx"></script>
+    <!-- Safari PWA Support -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="HorizonMaps" />
+    <link rel="apple-touch-icon" href="/favicon-192.png" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
