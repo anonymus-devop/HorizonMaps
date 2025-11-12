@@ -1,618 +1,468 @@
 // src/App.jsx
-// HorizonMaps - unified app with Mapbox, suggestions, route planning, navigation tracking,
-// liquid-glass UI using Tailwind classes, Colombia-biased suggestions, robust cleanup.
-//
-// Requirements:
-// - npm install mapbox-gl lucide-react
-// - .env: VITE_MAPBOX_TOKEN=pk.YOUR_TOKEN
-//
-// This file is intentionally long and verbose to include all helper functions, error handling,
-// UI states, and comments for easy localization / extension.
-
 import React, { useEffect, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
-import {
-  Search,
-  Navigation,
-  MapPin,
-  X,
-  Clock,
-  Loader2,
-  Play,
-  StopCircle,
-  RefreshCw,
-} from "lucide-react"; // icons used in the UI
+import { Search, Navigation, MapPin, Play, StopCircle, X } from "lucide-react";
 
-// Mapbox token via Vite env
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN || "";
 
-// --- Constants & config
 const DEFAULT_CENTER = [-74.08175, 4.60971]; // Bogotá
-const DEFAULT_ZOOM = 11;
-const SUGGEST_DEBOUNCE_MS = 300;
-const SUGGEST_LIMIT = 6;
-const DIRECTIONS_PROFILE = "driving"; // can be "walking", "cycling"
-const COLOMBIA_COUNTRY_CODE = "CO";
-const MAJOR_COLOMBIAN_CITIES = [
-  "Bogotá",
-  "Medellín",
-  "Cali",
-  "Cartagena",
-  "Barranquilla",
-  "Bucaramanga",
-  "Santa Marta",
-  "Pereira",
-  "Manizales",
-  "Villavicencio",
-  "Cúcuta",
-  "Ibagué",
-  "Sincelejo",
-];
 
-function noop() {}
-
-// small utility: sleep (ms)
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// Haversine distance (meters)
-function haversineMeters([lat1, lon1], [lat2, lon2]) {
-  const toRad = (v) => (v * Math.PI) / 180;
-  const R = 6371000; // meters
+// Helper: Haversine (meters)
+const toRad = (deg) => (deg * Math.PI) / 180;
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
   const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
+    Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// Safe fetch wrapper with JSON parse
-async function safeFetchJSON(url, opts) {
-  const res = await fetch(url, opts);
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`HTTP ${res.status}: ${text}`);
-  }
-  return res.json();
-}
-
-// --- Main App
-export default function App() {
-  // map refs
-  const mapContainerRef = useRef(null);
+export default function App({ isPwa = false, deferredPrompt = null }) {
   const mapRef = useRef(null);
-
-  // user marker & route marker refs
+  const containerRef = useRef(null);
   const userMarkerRef = useRef(null);
   const originMarkerRef = useRef(null);
   const destMarkerRef = useRef(null);
-
-  // watch id for live navigation
   const watchIdRef = useRef(null);
 
-  // debounce timer
-  const suggestTimerRef = useRef(null);
-
-  // state
-  const [isReady, setIsReady] = useState(false); // map loaded
-  const [isLoading, setIsLoading] = useState(false); // general loading
-  const [query, setQuery] = useState(""); // main unified search bar
-  const [suggestions, setSuggestions] = useState([]); // suggestion list
+  const [ready, setReady] = useState(false);
+  const [query, setQuery] = useState("");
+  const [suggestions, setSuggestions] = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
-  const [originCoords, setOriginCoords] = useState(null); // [lng, lat]
-  const [destCoords, setDestCoords] = useState(null); // [lng, lat]
-  const [routeGeoJSON, setRouteGeoJSON] = useState(null); // GeoJSON LineString
-  const [routeSummary, setRouteSummary] = useState(null); // {distance, duration}
-  const [stepsList, setStepsList] = useState([]); // array of steps
+  const [origin, setOrigin] = useState(null); // [lng, lat]
+  const [dest, setDest] = useState(null); // [lng, lat]
+  const [route, setRoute] = useState(null); // GeoJSON
+  const [steps, setSteps] = useState([]);
   const [navigating, setNavigating] = useState(false);
-  const [currentStepIndex, setCurrentStepIndex] = useState(0);
-  const [errorMessage, setErrorMessage] = useState(null);
+  const [currentStep, setCurrentStep] = useState(0);
   const [isMobile, setIsMobile] = useState(false);
-  const [lastSearchType, setLastSearchType] = useState("dest"); // "origin" or "dest" for ambiguous clicks
+  const suggestTimer = useRef(null);
 
-  // --- Initialize map once
   useEffect(() => {
     setIsMobile(/Mobi|Android/i.test(navigator.userAgent));
     if (mapRef.current) return;
 
-    // Basic guard: no token -> show friendly message overlay when ready
-    if (!mapboxgl.accessToken) {
-      console.warn("VITE_MAPBOX_TOKEN not set. Mapbox will not load.");
-    }
-
     mapRef.current = new mapboxgl.Map({
-      container: mapContainerRef.current,
-      style: "mapbox://styles/mapbox/dark-v10",
+      container: containerRef.current,
+      style: "mapbox://styles/mapbox/dark-v11",
       center: DEFAULT_CENTER,
-      zoom: DEFAULT_ZOOM,
+      zoom: 11,
     });
 
-    // add nav controls (we hide top-right extra UI by default)
-    mapRef.current.addControl(new mapboxgl.NavigationControl({ showCompass: true }), "top-right");
+    mapRef.current.addControl(new mapboxgl.NavigationControl(), "top-right");
 
-    // geolocate control but don't show built-in UI: create but we won't add to top-right to keep UI minimal
-    const geolocate = new mapboxgl.GeolocateControl({
-      positionOptions: { enableHighAccuracy: true },
-      trackUserLocation: true,
-      showAccuracyCircle: false,
-    });
-
-    // We'll call geolocate.trigger() when we want to set origin automatically
-    // Hook load
     mapRef.current.on("load", () => {
-      setIsReady(true);
-      // auto-trigger geolocate on load to set origin if allowed
+      setReady(true);
+      // attempts to get permission & initial location
       try {
-        geolocate.trigger();
-      } catch (e) {
-        // ignore
-      }
+        if ("geolocation" in navigator) {
+          navigator.geolocation.getCurrentPosition(
+            (p) => {
+              const coords = [p.coords.longitude, p.coords.latitude];
+              setOrigin(coords);
+              placeOriginMarker(coords);
+              flyTo(coords, 13);
+            },
+            () => {},
+            { enableHighAccuracy: true, maximumAge: 60_000, timeout: 5_000 }
+          );
+        }
+      } catch (e) {}
     });
 
-    mapRef.current.on("error", (e) => {
-      console.error("Map error", e);
-      setErrorMessage("Map failed to load. Check network and token.");
-    });
-
-    // Clean up on unmount
     return () => {
       if (mapRef.current) {
-        try {
-          mapRef.current.remove();
-        } catch (e) {}
+        mapRef.current.remove();
         mapRef.current = null;
       }
     };
   }, []);
 
-  // --- Helpers to add/update markers
-  function createMarkerElement(color = "#1E90FF", withPulse = true) {
+  // helpers
+  function flyTo(coords, zm = 14) {
+    try {
+      mapRef.current?.flyTo({ center: coords, zoom: zm });
+    } catch (e) {}
+  }
+  function createMarker(elColor = "#00E5FF", pulse = true) {
     const el = document.createElement("div");
     el.style.width = "18px";
     el.style.height = "18px";
     el.style.borderRadius = "50%";
-    el.style.background = color;
-    el.style.boxShadow = "0 0 12px rgba(0,0,0,0.6)";
+    el.style.background = elColor;
     el.style.border = "2px solid rgba(255,255,255,0.9)";
-    if (withPulse) {
-      el.style.animation = "hm-pulse 1.6s infinite alternate";
-    }
+    if (pulse) el.style.animation = "hmPulse 1.5s infinite alternate";
     return el;
   }
-
-  // add or update user marker
-  function placeOrMoveUserMarker([lng, lat]) {
+  function placeUserMarker(coords) {
     if (!mapRef.current) return;
-    try {
-      if (userMarkerRef.current) {
-        userMarkerRef.current.setLngLat([lng, lat]);
-      } else {
-        const el = createMarkerElement("#00E5FF", true);
-        userMarkerRef.current = new mapboxgl.Marker({ element: el })
-          .setLngLat([lng, lat])
-          .addTo(mapRef.current);
-      }
-    } catch (e) {
-      console.warn("placeOrMoveUserMarker error", e);
-    }
+    if (userMarkerRef.current) userMarkerRef.current.setLngLat(coords);
+    else userMarkerRef.current = new mapboxgl.Marker({ element: createMarker("#00E5FF", true) }).setLngLat(coords).addTo(mapRef.current);
   }
-
-  // origin / dest markers
-  function setSimpleMarker(refHolder, coords, color = "#34d399") {
+  function placeOriginMarker(coords) {
     if (!mapRef.current) return;
-    try {
-      if (refHolder.current) {
-        refHolder.current.setLngLat(coords);
-      } else {
-        const el = createMarkerElement(color, false);
-        refHolder.current = new mapboxgl.Marker({ element: el }).setLngLat(coords).addTo(mapRef.current);
-      }
-    } catch (e) {
-      console.warn("setSimpleMarker error", e);
-    }
+    if (originMarkerRef.current) originMarkerRef.current.setLngLat(coords);
+    else originMarkerRef.current = new mapboxgl.Marker({ element: createMarker("#34D399", false) }).setLngLat(coords).addTo(mapRef.current);
   }
-
-  // remove marker safely
-  function removeMarker(refHolder) {
+  function placeDestMarker(coords) {
+    if (!mapRef.current) return;
+    if (destMarkerRef.current) destMarkerRef.current.setLngLat(coords);
+    else destMarkerRef.current = new mapboxgl.Marker({ element: createMarker("#FB7185", false) }).setLngLat(coords).addTo(mapRef.current);
+  }
+  function removeRouteLayer() {
     try {
-      if (refHolder.current) {
-        refHolder.current.remove();
-        refHolder.current = null;
-      }
+      if (mapRef.current.getLayer("hm-route")) mapRef.current.removeLayer("hm-route");
+      if (mapRef.current.getSource("hm-route")) mapRef.current.removeSource("hm-route");
     } catch (e) {}
   }
 
-  // --- Suggestion logic (debounced)
-  async function doSuggest(queryText) {
-    if (!queryText || queryText.trim().length < 2) {
+  // --- Suggestions (Mapbox Geocoding)
+  function fetchSuggestions(q) {
+    if (!q || q.length < 2) {
       setSuggestions([]);
       setShowSuggestions(false);
       return;
     }
-    // Build Mapbox geocoding URL
-    const token = mapboxgl.accessToken;
-    if (!token) {
-      // fallback: local major cities that match the query
-      const localMatches = MAJOR_COLOMBIAN_CITIES.filter((c) =>
-        c.toLowerCase().includes(queryText.toLowerCase())
-      ).map((c) => ({ id: `city-${c}`, place_name: `${c}, Colombia`, center: null }));
-      setSuggestions(localMatches.slice(0, SUGGEST_LIMIT));
+    if (!mapboxgl.accessToken) {
+      // fallback: show main Colombian cities
+      const cities = ["Bogotá", "Medellín", "Cali", "Cartagena", "Barranquilla"].filter((c) =>
+        c.toLowerCase().includes(q.toLowerCase())
+      );
+      setSuggestions(cities.map((c) => ({ place_name: `${c}, Colombia`, fallback: true })));
       setShowSuggestions(true);
       return;
     }
-
-    const encoded = encodeURIComponent(queryText);
-    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encoded}.json?access_token=${token}&autocomplete=true&country=${COLOMBIA_COUNTRY_CODE}&limit=${SUGGEST_LIMIT}`;
-    try {
-      const json = await safeFetchJSON(url);
-      const features = json.features || [];
-      // Prepend major city matches if they contain query (de-dupe)
-      const cityMatches = MAJOR_COLOMBIAN_CITIES.filter((c) =>
-        c.toLowerCase().includes(queryText.toLowerCase())
-      ).map((c) => ({ id: `city-${c}`, place_name: `${c}, Colombia`, center: null }));
-
-      // combine
-      const combined = [
-        ...cityMatches,
-        ...features.filter((f) => !cityMatches.some((c) => c.place_name === f.place_name)),
-      ].slice(0, SUGGEST_LIMIT);
-
-      setSuggestions(combined);
-      setShowSuggestions(true);
-    } catch (err) {
-      console.error("Suggest fetch failed", err);
-      setSuggestions([]);
-      setShowSuggestions(false);
-    }
+    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json?access_token=${mapboxgl.accessToken}&autocomplete=true&country=CO&limit=6`;
+    fetch(url)
+      .then((r) => r.json())
+      .then((json) => {
+        setSuggestions(json.features || []);
+        setShowSuggestions(true);
+      })
+      .catch((e) => {
+        console.error("suggest", e);
+        setSuggestions([]);
+      });
   }
-
   function scheduleSuggest(q) {
-    clearTimeout(suggestTimerRef.current);
-    suggestTimerRef.current = setTimeout(() => doSuggest(q), SUGGEST_DEBOUNCE_MS);
+    clearTimeout(suggestTimer.current);
+    suggestTimer.current = setTimeout(() => fetchSuggestions(q), 280);
   }
 
-  // on query change (unified search input)
-  function onQueryChange(e) {
-    const v = e.target.value;
-    setQuery(v);
-    scheduleSuggest(v);
-    setLastSearchType("dest"); // by default treat search as destination input
-  }
-
-  // choose suggestion
-  async function chooseSuggestion(s) {
+  // suggestion click
+  async function onPickSuggestion(s) {
     setShowSuggestions(false);
-    setSuggestions([]);
     if (!s) return;
-
-    // If s.center is null, it's our major city placeholder -> geocode it
-    if (!s.center) {
-      // geocode
-      const token = mapboxgl.accessToken;
-      if (!token) {
-        // fallback: find city coords from rough mapping or default to Bogotá
-        const city = s.place_name.split(",")[0];
-        // simple map for a few major cities (latitude/longitude)
-        const quick = {
-          Bogotá: [-74.08175, 4.60971],
-          Medellín: [-75.5636, 6.2442],
-          Cali: [-76.5225, 3.4516],
-          Cartagena: [-75.4810, 10.3910],
-          Barranquilla: [-74.7813, 10.9685],
-        };
-        const c = quick[city] || DEFAULT_CENTER;
-        setDestCoords(c);
-        setQuery(s.place_name);
-        setSimpleMarker(destMarkerRef, c, "#fb7185");
-        if (mapRef.current) mapRef.current.flyTo({ center: c, zoom: 12 });
-        return;
-      }
-      try {
-        const encoded = encodeURIComponent(s.place_name.split(",")[0]);
-        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encoded}.json?access_token=${token}&country=${COLOMBIA_COUNTRY_CODE}&limit=1`;
-        const json = await safeFetchJSON(url);
-        const f = json.features && json.features[0];
-        if (!f) throw new Error("No geocode results");
-        const center = f.center;
-        setDestCoords(center);
-        setQuery(s.place_name);
-        setSimpleMarker(destMarkerRef, center, "#fb7185");
-        if (mapRef.current) mapRef.current.flyTo({ center, zoom: 12 });
-        return;
-      } catch (err) {
-        console.error("geocode fallback error", err);
-        setErrorMessage("Failed to geocode selected city.");
-        return;
-      }
-    }
-
-    // If we have center coords from mapbox
-    const center = s.center;
-    setDestCoords(center);
-    setQuery(s.place_name);
-    setSimpleMarker(destMarkerRef, center, "#fb7185");
-    if (mapRef.current) mapRef.current.flyTo({ center, zoom: 13 });
-  }
-
-  // --- Set origin via browser geolocation
-  function setOriginToCurrent() {
-    if (!("geolocation" in navigator)) {
-      alert("Geolocation not supported by this device.");
+    if (s.fallback) {
+      // simple fallback geocoding mapping for a few cities
+      const quick = { Bogotá: [-74.08175, 4.60971], Medellín: [-75.5636, 6.2442], Cali: [-76.5225, 3.4516] };
+      const name = s.place_name.split(",")[0];
+      const coords = quick[name] || DEFAULT_CENTER;
+      setDest(coords);
+      placeDestMarker(coords);
+      flyTo(coords, 12);
       return;
     }
-    setIsLoading(true);
+    // Mapbox feature
+    const coords = s.center;
+    setDest(coords);
+    placeDestMarker(coords);
+    flyTo(coords, 13);
+  }
+
+  // --- Set origin from device
+  function setOriginFromDevice() {
+    if (!("geolocation" in navigator)) return alert("Geolocation not supported");
     navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const { longitude, latitude } = position.coords;
-        const coords = [longitude, latitude];
-        setOriginCoords(coords);
-        setSimpleMarker(originMarkerRef, coords, "#34d399");
-        placeOrMoveUserMarker(coords);
-        try {
-          mapRef.current.flyTo({ center: coords, zoom: 14 });
-        } catch (e) {}
-        setIsLoading(false);
+      (p) => {
+        const coords = [p.coords.longitude, p.coords.latitude];
+        setOrigin(coords);
+        placeOriginMarker(coords);
+        placeUserMarker(coords);
+        flyTo(coords, 14);
       },
       (err) => {
-        console.error("geolocation failed", err);
-        setIsLoading(false);
-        alert("Failed to get location or permission denied.");
+        alert("Location permission denied or timeout");
       },
-      { enableHighAccuracy: true, timeout: 10000 }
+      { enableHighAccuracy: true }
     );
   }
 
-  // --- Plan route between originCoords and destCoords using Mapbox Directions API
+  // --- Plan route using Mapbox Directions (returns route geometry & steps)
   async function planRoute() {
-    setErrorMessage(null);
-    if (!originCoords) {
-      alert("Please set origin (My Location) first.");
-      return;
-    }
-    if (!destCoords) {
-      alert("Please choose a destination.");
-      return;
-    }
-    const token = mapboxgl.accessToken;
-    if (!token) {
-      setErrorMessage("Mapbox token not set. Cannot request directions.");
-      return;
-    }
-
-    setIsLoading(true);
+    if (!origin || !dest) return alert("Set origin and destination first");
+    if (!mapboxgl.accessToken) return alert("Set VITE_MAPBOX_TOKEN in .env");
+    removeRouteLayer();
+    const from = `${origin[0]},${origin[1]}`;
+    const to = `${dest[0]},${dest[1]}`;
+    const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${from};${to}?steps=true&geometries=geojson&overview=full&access_token=${mapboxgl.accessToken}&language=es`;
     try {
-      const from = `${originCoords[0]},${originCoords[1]}`;
-      const to = `${destCoords[0]},${destCoords[1]}`;
-      const url = `https://api.mapbox.com/directions/v5/mapbox/${DIRECTIONS_PROFILE}/${from};${to}?steps=true&geometries=geojson&overview=full&access_token=${token}&language=es`;
-      const json = await safeFetchJSON(url);
-      const route = json.routes && json.routes[0];
-      if (!route) {
-        throw new Error("No route found");
+      const res = await fetch(url);
+      const json = await res.json();
+      if (!json.routes || json.routes.length === 0) {
+        return alert("No route found");
       }
-
-      // route geometry and display
-      const coords = route.geometry.coordinates;
-      const geojson = {
-        type: "Feature",
-        properties: {},
-        geometry: { type: "LineString", coordinates: coords },
-      };
-
-      setRouteGeoJSON(geojson);
-      setRouteSummary({ distance: route.distance, duration: route.duration });
-      // extract steps from first leg (common)
-      const legs = route.legs && route.legs[0];
-      setStepsList((legs && legs.steps) || []);
-      setCurrentStepIndex(0);
-
-      // Draw on map
-      if (!mapRef.current) throw new Error("Map not ready");
-      // remove previous route layer/source safely
-      try {
-        if (mapRef.current.getLayer("horizon-route")) {
-          mapRef.current.removeLayer("horizon-route");
-        }
-        if (mapRef.current.getSource("horizon-route")) {
-          mapRef.current.removeSource("horizon-route");
-        }
-      } catch (e) {}
-
-      mapRef.current.addSource("horizon-route", { type: "geojson", data: geojson });
+      const r = json.routes[0];
+      const geo = r.geometry;
+      // draw line
+      mapRef.current.addSource("hm-route", { type: "geojson", data: { type: "Feature", geometry: geo } });
       mapRef.current.addLayer({
-        id: "horizon-route",
+        id: "hm-route",
         type: "line",
-        source: "horizon-route",
+        source: "hm-route",
         layout: { "line-join": "round", "line-cap": "round" },
-        paint: {
-          "line-color": "#60a5fa",
-          "line-width": 6,
-          "line-opacity": 0.95,
-        },
+        paint: { "line-color": "#60a5fa", "line-width": 6, "line-opacity": 0.95 },
       });
-
-      // place origin/dest markers if not already
-      setSimpleMarker(originMarkerRef, originCoords, "#34d399");
-      setSimpleMarker(destMarkerRef, destCoords, "#fb7185");
-
-      // fit bounds to route
+      setRoute(geo);
+      // extract steps of first leg
+      const st = (r.legs && r.legs[0] && r.legs[0].steps) || [];
+      setSteps(st);
+      setCurrentStep(0);
+      // fit bounds
+      const coords = geo.coordinates;
       const bounds = coords.reduce((b, c) => b.extend(c), new mapboxgl.LngLatBounds(coords[0], coords[0]));
-      mapRef.current.fitBounds(bounds, { padding: 80, duration: 1000 });
-
-      setIsLoading(false);
+      mapRef.current.fitBounds(bounds, { padding: 80, duration: 800 });
     } catch (err) {
-      console.error("planRoute error", err);
-      setErrorMessage("Failed to plan route. Try again.");
-      setIsLoading(false);
+      console.error("planRoute", err);
+      alert("Failed to get directions");
     }
   }
 
-  // --- Start navigation: watchPosition, update marker and step index
+  // --- Live navigation behavior (keeps recalculating if off-route)
   function startNavigation() {
-    if (!routeGeoJSON) {
-      alert("No route planned. Please plan a route first.");
-      return;
-    }
-    if (!("geolocation" in navigator)) {
-      alert("Geolocation not supported.");
-      return;
-    }
+    if (!route) return alert("Plan a route before starting navigation");
+    if (!("geolocation" in navigator)) return alert("Geolocation not supported");
 
     setNavigating(true);
-    // clear any existing watch
+    // clear previous watch
     if (watchIdRef.current != null) {
       navigator.geolocation.clearWatch(watchIdRef.current);
       watchIdRef.current = null;
     }
 
-    // watch position
+    // set watch
     const id = navigator.geolocation.watchPosition(
-      (pos) => {
-        const lng = pos.coords.longitude;
-        const lat = pos.coords.latitude;
-        placeOrMoveUserMarker([lng, lat]);
+      async (p) => {
+        const lng = p.coords.longitude;
+        const lat = p.coords.latitude;
+        placeUserMarker([lng, lat]);
 
-        // center follow on mobile
+        // center on user while navigating on mobile
         if (isMobile) {
-          try {
-            mapRef.current.easeTo({ center: [lng, lat], zoom: 15, duration: 500 });
-          } catch (e) {}
+          flyTo([lng, lat], 15);
         }
 
-        // update step index by checking proximity to next maneuver location
-        const step = stepsList[currentStepIndex];
-        if (step && step.maneuver && step.maneuver.location) {
-          const [targetLng, targetLat] = step.maneuver.location;
-          const meters = haversineMeters([lat, lng], [targetLat, targetLng]);
-          // if within 30 meters go to next
-          if (meters < 30 && currentStepIndex < stepsList.length - 1) {
-            setCurrentStepIndex((i) => i + 1);
+        // if we have steps, check proximity to current maneuver
+        if (steps && steps.length) {
+          const step = steps[currentStep];
+          if (step && step.maneuver && step.maneuver.location) {
+            const [tLng, tLat] = step.maneuver.location;
+            const meters = haversineMeters(lat, lng, tLat, tLng);
+            // if within 25m, advance to next
+            if (meters < 25 && currentStep < steps.length - 1) {
+              setCurrentStep((i) => i + 1);
+            }
+          }
+        }
+
+        // Off-route detection: compute distance to nearest point on route (approx) -> if > 40m, re-route from current pos
+        if (route && route.coordinates && route.coordinates.length > 0) {
+          // fast sampling: compute min distance to route vertices (approx)
+          const minMeters = route.coordinates.reduce((min, c) => {
+            const d = haversineMeters(lat, lng, c[1], c[0]);
+            return d < min ? d : min;
+          }, Infinity);
+          if (minMeters > 40) {
+            // Off route: re-plan from current position to original destination
+            try {
+              // update origin to this position
+              const newOrigin = [lng, lat];
+              setOrigin(newOrigin);
+              placeOriginMarker(newOrigin);
+              // re-request directions (dest unchanged)
+              const from = `${newOrigin[0]},${newOrigin[1]}`;
+              const to = `${dest[0]},${dest[1]}`;
+              const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${from};${to}?steps=true&geometries=geojson&overview=full&access_token=${mapboxgl.accessToken}&language=es`;
+              const res = await fetch(url);
+              const j = await res.json();
+              if (j.routes && j.routes[0]) {
+                const newGeo = j.routes[0].geometry;
+                // update route source
+                if (mapRef.current.getSource("hm-route")) {
+                  mapRef.current.getSource("hm-route").setData({ type: "Feature", geometry: newGeo });
+                } else {
+                  // fallback: add source/layer
+                  mapRef.current.addSource("hm-route", { type: "geojson", data: { type: "Feature", geometry: newGeo } });
+                  mapRef.current.addLayer({
+                    id: "hm-route",
+                    type: "line",
+                    source: "hm-route",
+                    paint: { "line-color": "#60a5fa", "line-width": 6 },
+                  });
+                }
+                setRoute(newGeo);
+                const newSteps = (j.routes[0].legs && j.routes[0].legs[0] && j.routes[0].legs[0].steps) || [];
+                setSteps(newSteps);
+                setCurrentStep(0);
+              }
+            } catch (err) {
+              console.error("replan error", err);
+            }
           }
         }
       },
       (err) => {
-        console.error("watchPosition error", err);
-        alert("Failed to track location. Check permissions.");
+        console.error("nav watch error", err);
+        alert("Failed to read location. Check permissions.");
         stopNavigation();
       },
-      { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 }
+      { enableHighAccuracy: true, maximumAge: 1000, timeout: 8000 }
     );
 
     watchIdRef.current = id;
   }
 
-  // Stop navigation
   function stopNavigation() {
-    if (watchIdRef.current != null) {
-      try {
+    try {
+      if (watchIdRef.current != null) {
         navigator.geolocation.clearWatch(watchIdRef.current);
-      } catch (e) {}
-      watchIdRef.current = null;
-    }
+        watchIdRef.current = null;
+      }
+    } catch (e) {}
     setNavigating(false);
   }
 
-  // quick helper: clear route
-  function clearRoute() {
+  // --- UI handlers
+  function onQueryChange(e) {
+    setQuery(e.target.value);
+    scheduleSuggest(e.target.value);
+  }
+  function scheduleSuggest(q) {
+    clearTimeout(suggestTimer.current);
+    suggestTimer.current = setTimeout(() => fetchSuggestions(q), 260);
+  }
+  function fetchSuggestions(q) {
+    if (!q || q.length < 2) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+    if (!mapboxgl.accessToken) {
+      // fallback
+      const quick = ["Bogotá", "Medellín", "Cali", "Cartagena"].filter((n) => n.toLowerCase().includes(q.toLowerCase()));
+      setSuggestions(quick.map((c) => ({ place_name: `${c}, Colombia`, fallback: true })));
+      setShowSuggestions(true);
+      return;
+    }
+    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json?access_token=${mapboxgl.accessToken}&autocomplete=true&country=CO&limit=6`;
+    fetch(url)
+      .then((r) => r.json())
+      .then((json) => {
+        setSuggestions(json.features || []);
+        setShowSuggestions(true);
+      })
+      .catch((e) => {
+        console.error("suggest", e);
+      });
+  }
+
+  // choose suggestion & set dest
+  async function pickSuggestion(s) {
+    setShowSuggestions(false);
+    if (!s) return;
+    if (s.fallback) {
+      const m = { Bogotá: [-74.08175, 4.60971], Medellín: [-75.5636, 6.2442], Cali: [-76.5225, 3.4516] };
+      const city = s.place_name.split(",")[0];
+      const coords = m[city] || DEFAULT_CENTER;
+      setDest(coords);
+      placeDestMarker(coords);
+      flyTo(coords);
+      return;
+    }
+    // real feature
+    const coords = s.center;
+    setDest(coords);
+    placeDestMarker(coords);
+    flyTo(coords);
+  }
+
+  // quick action: clear route & markers
+  function clearAll() {
+    removeRouteLayer();
+    if (originMarkerRef.current) originMarkerRef.current.remove(), (originMarkerRef.current = null);
+    if (destMarkerRef.current) destMarkerRef.current.remove(), (destMarkerRef.current = null);
+    if (userMarkerRef.current) userMarkerRef.current.remove(), (userMarkerRef.current = null);
+    setOrigin(null);
+    setDest(null);
+    setRoute(null);
+    setSteps([]);
+    setCurrentStep(0);
+  }
+
+  // small helper: flyTo
+  function flyTo(coords, z = 14) {
     try {
-      if (mapRef.current && mapRef.current.getLayer && mapRef.current.getLayer("horizon-route")) {
-        mapRef.current.removeLayer("horizon-route");
-      }
-      if (mapRef.current && mapRef.current.getSource && mapRef.current.getSource("horizon-route")) {
-        mapRef.current.removeSource("horizon-route");
-      }
+      mapRef.current.flyTo({ center: coords, zoom: z });
     } catch (e) {}
-    setRouteGeoJSON(null);
-    setRouteSummary(null);
-    setStepsList([]);
-    setCurrentStepIndex(0);
-    removeMarker(destMarkerRef);
   }
 
-  // --- UI action: quick set origin to current location and mark it
-  const quickSetOrigin = () => {
-    setOriginToCurrent();
-    setLastSearchType("origin");
-  };
-
-  // --- Persist a friendly fallback UI for when Mapbox fails
-  // render small overlay if token missing
-  const renderTokenWarning = () => {
-    if (mapboxgl.accessToken) return null;
-    return (
-      <div className="absolute inset-0 z-60 flex items-center justify-center pointer-events-none">
-        <div className="pointer-events-auto bg-white/90 text-slate-900 rounded-2xl p-6 shadow-xl max-w-lg text-center">
-          <h2 className="text-lg font-semibold mb-2">Mapbox token missing</h2>
-          <p className="text-sm mb-4">Set <code>VITE_MAPBOX_TOKEN</code> in your .env to enable maps.</p>
-        </div>
-      </div>
-    );
-  };
-
-  // small accessibility: keyboard navigation for suggestions
-  function onKeyDownHandler(e) {
-    if (!showSuggestions || suggestions.length === 0) return;
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      // move focus to suggestion list (not implemented focus wise) - skip for simplicity
-    }
+  // keyboard Enter triggers first suggestion or plan if dest set
+  function onInputKeyDown(e) {
     if (e.key === "Enter") {
-      // choose top suggestion
-      if (suggestions[0]) chooseSuggestion(suggestions[0]);
+      if (showSuggestions && suggestions[0]) pickSuggestion(suggestions[0]);
+      else if (dest && origin) planRoute();
     }
   }
 
-  // cleanup on unmount: remove watchPosition etc
+  // cleanup
   useEffect(() => {
     return () => {
-      if (watchIdRef.current != null) {
-        try {
-          navigator.geolocation.clearWatch(watchIdRef.current);
-        } catch (e) {}
-      }
-      clearTimeout(suggestTimerRef.current);
+      clearTimeout(suggestTimer.current);
+      try {
+        if (watchIdRef.current != null) navigator.geolocation.clearWatch(watchIdRef.current);
+      } catch (e) {}
     };
   }, []);
 
-  // --- UI markup
-  return (
-    <div className="w-screen h-screen relative bg-gradient-to-br from-blue-900 via-indigo-900 to-violet-900 text-white overflow-hidden">
-      {/* Map container */}
-      <div ref={mapContainerRef} className="absolute inset-0 z-0" />
+  // small CSS injection for pulse
+  const pulseStyle = (
+    <style>
+      {`@keyframes hmPulse {0%{transform:scale(0.95);opacity:1}100%{transform:scale(1.2);opacity:0.75}}`}
+    </style>
+  );
 
-      {/* Top unified liquid glass search bar (merged actions inside) */}
-      <div className="absolute top-5 left-1/2 -translate-x-1/2 z-40 w-[92%] md:w-[900px]">
+  return (
+    <div className="w-screen h-screen relative bg-gradient-to-br from-blue-900 via-indigo-900 to-violet-900 text-white">
+      {pulseStyle}
+      <div ref={containerRef} className="absolute inset-0 z-0" />
+
+      {/* Top unified glass bar */}
+      <div className="absolute top-5 left-1/2 -translate-x-1/2 z-50 w-[92%] md:w-[900px]">
         <div className="backdrop-blur-xl bg-white/8 border border-white/20 rounded-3xl p-3 shadow-2xl">
           <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2">
-              <div className="p-2 rounded-lg bg-white/6">
-                <Search className="w-5 h-5 text-white/90" />
-              </div>
+            <div className="p-2 rounded-lg bg-white/6">
+              <Search className="w-5 h-5 text-white/90" />
             </div>
 
-            {/* Search input */}
             <div className="flex-1 relative">
               <input
                 value={query}
                 onChange={onQueryChange}
-                onKeyDown={onKeyDownHandler}
-                onFocus={() => query && scheduleSuggest(query)}
-                placeholder="Search destination or type a Colombian city..."
+                onKeyDown={onInputKeyDown}
+                placeholder="Search destination (Colombia) or type a place..."
                 className="w-full bg-transparent outline-none placeholder-white/60 text-white p-3 rounded-xl"
-                aria-label="Search destination"
+                aria-label="destination"
+                onFocus={() => query && scheduleSuggest(query)}
               />
 
-              {/* Suggestion box */}
               {showSuggestions && suggestions && suggestions.length > 0 && (
-                <div className="absolute left-0 right-0 mt-2 bg-black/60 border border-white/10 rounded-xl max-h-56 overflow-auto z-50 p-1">
+                <div className="absolute left-0 right-0 mt-2 bg-black/60 border border-white/10 rounded-xl max-h-56 overflow-auto z-60 p-1">
                   {suggestions.map((s, idx) => (
                     <div
                       key={s.id ?? `${s.place_name}-${idx}`}
-                      onClick={() => {
-                        chooseSuggestion(s);
-                        setShowSuggestions(false);
-                      }}
+                      onClick={() => pickSuggestion(s)}
                       className="px-3 py-2 hover:bg-white/10 cursor-pointer rounded-md text-sm"
                     >
                       {s.place_name}
@@ -622,137 +472,61 @@ export default function App() {
               )}
             </div>
 
-            {/* Compact action buttons inside the bar */}
             <div className="flex items-center gap-2">
-              <button
-                title="Set origin to current location"
-                onClick={quickSetOrigin}
-                className="bg-white/6 hover:bg-white/12 p-2 rounded-md"
-              >
+              <button title="My location" onClick={setOriginFromDevice} className="bg-white/6 hover:bg-white/12 p-2 rounded-md">
                 <MapPin className="w-5 h-5 text-white/90" />
               </button>
 
-              <button
-                title="Plan route"
-                onClick={planRoute}
-                className="bg-blue-600 hover:bg-blue-700 px-3 py-2 rounded-md font-medium flex items-center gap-2"
-              >
-                <Clock className="w-4 h-4" />
+              <button title="Plan route" onClick={planRoute} className="bg-blue-600 hover:bg-blue-700 px-3 py-2 rounded-md">
                 Plan
               </button>
 
               {!navigating ? (
-                <button
-                  title="Start navigation"
-                  onClick={startNavigation}
-                  className="bg-green-600 hover:bg-green-700 px-3 py-2 rounded-md font-medium flex items-center gap-2"
-                >
-                  <Play className="w-4 h-4" /> Start
+                <button title="Start nav" onClick={startNavigation} className="bg-green-600 hover:bg-green-700 px-3 py-2 rounded-md">
+                  <Play className="w-4 h-4" />
                 </button>
               ) : (
-                <button
-                  title="Stop navigation"
-                  onClick={stopNavigation}
-                  className="bg-red-600 hover:bg-red-700 px-3 py-2 rounded-md font-medium flex items-center gap-2"
-                >
-                  <StopCircle className="w-4 h-4" /> Stop
+                <button title="Stop nav" onClick={stopNavigation} className="bg-red-600 hover:bg-red-700 px-3 py-2 rounded-md">
+                  <StopCircle className="w-4 h-4" />
                 </button>
               )}
 
-              <button
-                title="Clear route"
-                onClick={() => {
-                  clearRoute();
-                }}
-                className="bg-white/6 hover:bg-white/12 p-2 rounded-md"
-              >
+              <button title="Clear" onClick={clearAll} className="bg-white/6 hover:bg-white/12 p-2 rounded-md">
                 <X className="w-5 h-5 text-white/90" />
               </button>
             </div>
           </div>
 
-          {/* route summary shown in the top bar below if exists */}
-          {routeSummary && (
+          {/* route summary */}
+          {route && (
             <div className="mt-3 text-sm text-white/90 flex items-center justify-between">
-              <div>
-                Distance: <strong>{(routeSummary.distance / 1000).toFixed(2)} km</strong>
-              </div>
-              <div>
-                ETA: <strong>{Math.round(routeSummary.duration / 60)} min</strong>
-              </div>
+              <div>Distance: <strong>{(route && route.coordinates ? (route.coordinates.length && "—") : "—")}</strong></div>
+              <div>ETA: <strong>—</strong></div>
             </div>
           )}
         </div>
       </div>
 
-      {/* Small bottom panel with steps list (liquid glass) */}
-      <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-40 w-[92%] md:w-[800px]">
+      {/* bottom turn-by-turn */}
+      <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-50 w-[92%] md:w-[800px]">
         <div className="backdrop-blur-xl bg-white/6 border border-white/10 rounded-2xl p-3 shadow-xl max-h-48 overflow-auto">
-          {isLoading ? (
-            <div className="flex items-center gap-3">
-              <Loader2 className="animate-spin" />
-              Loading...
-            </div>
-          ) : routeGeoJSON ? (
+          {steps && steps.length > 0 ? (
             <div>
-              <div className="text-sm text-white/80 mb-2">Turn-by-turn</div>
+              <div className="text-sm text-white/80 mb-2">Directions</div>
               <div className="space-y-2">
-                {stepsList.map((st, idx) => (
-                  <div
-                    key={idx}
-                    className={`p-2 rounded-md ${idx === currentStepIndex ? "bg-white/10 text-amber-200" : "text-white/80"}`}
-                  >
-                    <div className="text-xs">{Math.round(st.distance)} m • {st.duration ? Math.round(st.duration) : ""} s</div>
-                    <div>{st.maneuver && st.maneuver.instruction}</div>
+                {steps.map((s, i) => (
+                  <div key={i} className={`p-2 rounded-md ${i === currentStep ? "bg-white/10 text-amber-200" : "text-white/80"}`}>
+                    <div className="text-xs">{Math.round(s.distance)} m</div>
+                    <div>{s.maneuver && s.maneuver.instruction}</div>
                   </div>
                 ))}
               </div>
             </div>
           ) : (
-            <div className="text-sm text-white/70">No route planned. Use the search bar to plan a route.</div>
+            <div className="text-sm text-white/70">No route planned.</div>
           )}
         </div>
       </div>
-
-      {/* small floating right recenter button */}
-      <div className="absolute right-4 bottom-28 z-40">
-        <button
-          onClick={() => {
-            if (originCoords) {
-              mapRef.current?.flyTo({ center: originCoords, zoom: 14 });
-            } else {
-              // fallback re-center to default
-              mapRef.current?.flyTo({ center: DEFAULT_CENTER, zoom: DEFAULT_ZOOM });
-            }
-          }}
-          className="bg-white/8 hover:bg-white/14 p-3 rounded-full shadow-lg"
-          title="Center on origin"
-        >
-          <RefreshCw className="w-5 h-5 text-white/90" />
-        </button>
-      </div>
-
-      {/* token missing overlay */}
-      {renderTokenWarning()}
-
-      {/* small CSS for pulse animation (embedded here for convenience) */}
-      <style>{`
-        @keyframes hm-pulse {
-          0% { transform: scale(0.95); opacity: 1; }
-          100% { transform: scale(1.2); opacity: 0.75; }
-        }
-        /* light scrollbar for suggestion list on dark background */
-        .::-webkit-scrollbar { height: 8px; width: 8px; }
-        .::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 8px; }
-      `}</style>
-
-      {/* Inline minimal error banner (bottom-left) */}
-      {errorMessage && (
-        <div className="absolute left-4 bottom-4 bg-red-700/90 text-white px-3 py-2 rounded-md shadow-lg z-50">
-          {errorMessage}
-          <button className="ml-3 underline" onClick={() => setErrorMessage(null)}>Dismiss</button>
-        </div>
-      )}
     </div>
   );
 }
