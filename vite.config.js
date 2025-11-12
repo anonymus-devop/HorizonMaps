@@ -1,29 +1,13 @@
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
-import { VitePWA } from 'vite-plugin-pwa';
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
-  plugins: [
-    react(),
-    VitePWA({
-      registerType: 'autoUpdate',
-      manifest: {
-        name: 'HorizonMaps',
-        short_name: 'HMaps',
-        start_url: '/',
-        display: 'standalone',
-        background_color: '#0b1120',
-        theme_color: '#2563eb',
-        icons: [
-          { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
-          { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
-        ],
-      },
-    }),
-  ],
+  plugins: [react(), VitePWA()],
+  base: './', // ✅ Important for GitHub Pages and Capacitor
   build: {
     rollupOptions: {
-      external: ['mapbox-gl'], // ✅ Fix for your build error
+      external: [],
     },
   },
-});
+})
