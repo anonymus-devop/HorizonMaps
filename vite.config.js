@@ -7,29 +7,23 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
-      includeAssets: ["favicon.png", "apple-touch-icon.png", "mask-icon.svg"],
+      includeAssets: ["favicon.ico", "apple-touch-icon.png", "mask-icon.svg"],
       manifest: {
         name: "HorizonMaps",
-        short_name: "HorizonMaps",
-        description: "Navigation and route planning with Mapbox",
-        theme_color: "#007AFF",
+        short_name: "HMaps",
+        description: "Navigation and geolocation web app powered by Mapbox",
+        theme_color: "#0f172a",
         icons: [
-          {
-            src: "pwa-192x192.png",
-            sizes: "192x192",
-            type: "image/png",
-          },
-          {
-            src: "pwa-512x512.png",
-            sizes: "512x512",
-            type: "image/png",
-          },
-        ],
+          { src: "icons/icon-192x192.png", sizes: "192x192", type: "image/png" },
+          { src: "icons/icon-512x512.png", sizes: "512x512", type: "image/png" }
+        ]
       },
     }),
   ],
   build: {
-    outDir: "dist",
-    sourcemap: false,
+    rollupOptions: {
+      external: [],
+    },
   },
+  base: "./",
 });
