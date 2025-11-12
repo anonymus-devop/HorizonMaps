@@ -30,7 +30,7 @@ jobs:
           npm install
           npm install @turf/turf mapbox-gl raf
           npm install -g @bubblewrap/cli
-          npm install vite-plugin-pwa --save-dev lucide-react
+          npm install vite-plugin-pwa --save-dev lucide-react framer-motion
       - name: Install MapBox
         run: npm install mapbox-gl
       - name: Build project
