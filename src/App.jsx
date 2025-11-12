@@ -1,169 +1,126 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import mapboxgl from "mapbox-gl";
-import "mapbox-gl/dist/mapbox-gl.css";
-import { Search, MapPin, Play, StopCircle, X, Navigation } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { Compass, LocateFixed, MessageCircle } from "lucide-react";
 
-mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN || "";
-
-const DEFAULT_CENTER = [-74.08175, 4.60971]; // Bogotá
+mapboxgl.accessToken = "YOUR_MAPBOX_ACCESS_TOKEN";
 
 export default function App() {
-  const mapRef = useRef(null);
-  const containerRef = useRef(null);
-  const userMarkerRef = useRef(null);
-  const [origin, setOrigin] = useState(null);
-  const [isTracking, setIsTracking] = useState(false);
+  const mapContainer = useRef(null);
+  const map = useRef(null);
+  const [lng, setLng] = useState(-74.0818);
+  const [lat, setLat] = useState(4.611);
+  const [zoom, setZoom] = useState(12);
+  const [showGPT, setShowGPT] = useState(false);
+  const [query, setQuery] = useState("");
+  const [aiResponse, setAIResponse] = useState("");
+  const [coords, setCoords] = useState(null);
 
-  // --- initialize map ---
+  // Inicializa el mapa
   useEffect(() => {
-    if (mapRef.current) return;
-
-    mapRef.current = new mapboxgl.Map({
-      container: containerRef.current,
+    if (map.current) return;
+    map.current = new mapboxgl.Map({
+      container: mapContainer.current,
       style: "mapbox://styles/mapbox/dark-v11",
-      center: DEFAULT_CENTER,
-      zoom: 12,
+      center: [lng, lat],
+      zoom,
     });
 
-    mapRef.current.addControl(new mapboxgl.NavigationControl(), "top-right");
-
-    // get user position
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const coords = [pos.coords.longitude, pos.coords.latitude];
-        setOrigin(coords);
-        addUserMarker(coords);
-        flyTo(coords);
-      },
-      () => console.warn("No location access"),
-      { enableHighAccuracy: true }
-    );
+    map.current.addControl(new mapboxgl.NavigationControl());
   }, []);
 
-  // --- helpers ---
-  function flyTo(coords) {
-    mapRef.current?.flyTo({
-      center: coords,
-      zoom: 15,
-      speed: 0.8,
-      curve: 1.3,
-      essential: true,
+  // Botón para centrar ubicación
+  const handleLocate = () => {
+    navigator.geolocation.getCurrentPosition((pos) => {
+      const { latitude, longitude } = pos.coords;
+      map.current.flyTo({ center: [longitude, latitude], zoom: 15 });
+      new mapboxgl.Marker({ color: "#00BFFF" })
+        .setLngLat([longitude, latitude])
+        .addTo(map.current);
     });
-  }
+  };
 
-  function addUserMarker(coords) {
-    if (!mapRef.current) return;
-    if (userMarkerRef.current) {
-      userMarkerRef.current.setLngLat(coords);
-      return;
+  // Buscar con "AI"
+  const handleAISearch = async () => {
+    if (!query.trim()) return;
+
+    try {
+      const res = await fetch(
+        `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
+          query
+        )}.json?access_token=${mapboxgl.accessToken}`
+      );
+      const data = await res.json();
+      if (!data.features || data.features.length === 0)
+        throw new Error("No se encontraron coordenadas válidas.");
+
+      const [lng, lat] = data.features[0].center;
+      setCoords({ lng, lat });
+      setAIResponse(data.features[0].place_name);
+
+      map.current.flyTo({ center: [lng, lat], zoom: 14 });
+      new mapboxgl.Marker({ color: "#00BFFF" })
+        .setLngLat([lng, lat])
+        .addTo(map.current);
+    } catch (err) {
+      alert(err.message);
     }
-
-    const el = document.createElement("div");
-    el.style.width = "20px";
-    el.style.height = "20px";
-    el.style.borderRadius = "50%";
-    el.style.background = "#00E5FF";
-    el.style.border = "2px solid white";
-    el.style.boxShadow = "0 0 20px rgba(0,229,255,0.8)";
-    el.style.animation = "pulse 2s infinite alternate";
-
-    userMarkerRef.current = new mapboxgl.Marker(el)
-      .setLngLat(coords)
-      .addTo(mapRef.current);
-  }
-
-  // --- re-center to user ---
-  function centerToUser() {
-    if (!origin) {
-      alert("Ubicación no disponible aún.");
-      return;
-    }
-    flyTo(origin);
-  }
-
-  // --- live tracking toggle ---
-  function toggleTracking() {
-    if (isTracking) {
-      setIsTracking(false);
-      navigator.geolocation.clearWatch(isTracking);
-      return;
-    }
-
-    const id = navigator.geolocation.watchPosition(
-      (pos) => {
-        const coords = [pos.coords.longitude, pos.coords.latitude];
-        setOrigin(coords);
-        addUserMarker(coords);
-        flyTo(coords);
-      },
-      (err) => console.error(err),
-      { enableHighAccuracy: true }
-    );
-    setIsTracking(id);
-  }
-
-  // --- animation style ---
-  const iosMotion = {
-    type: "spring",
-    stiffness: 150,
-    damping: 18,
   };
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden text-white">
-      <style>
-        {`@keyframes pulse {
-          0% { transform: scale(0.95); opacity: 1; }
-          100% { transform: scale(1.2); opacity: 0.7; }
-        }`}
-      </style>
+    <div className="relative h-screen w-screen overflow-hidden bg-[#0a0a0a]">
+      {/* Mapa */}
+      <div ref={mapContainer} className="h-full w-full rounded-3xl" />
 
-      <div ref={containerRef} className="absolute inset-0 z-0" />
-
-      {/* UI overlay */}
-      <motion.div
-        initial={{ y: -60, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={iosMotion}
-        className="absolute top-5 left-1/2 -translate-x-1/2 z-50 w-[90%] md:w-[800px]"
-      >
-        <div className="backdrop-blur-2xl bg-white/10 border border-white/20 rounded-3xl p-3 shadow-lg flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Search className="w-5 h-5 text-white/80" />
-            <input
-              type="text"
-              placeholder="Buscar destino..."
-              className="bg-transparent flex-1 text-white outline-none placeholder-white/60"
-            />
-          </div>
-          <button
-            onClick={toggleTracking}
-            className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 flex items-center gap-1"
-          >
-            {isTracking ? (
-              <>
-                <StopCircle className="w-4 h-4" /> Stop
-              </>
-            ) : (
-              <>
-                <Play className="w-4 h-4" /> Go
-              </>
-            )}
-          </button>
-        </div>
-      </motion.div>
-
-      {/* --- Center Locate Button (new) --- */}
+      {/* Botón central de ubicación */}
       <motion.button
-        onClick={centerToUser}
-        title="Centrar en mi ubicación"
-        initial={{ opacity: 0, scale: 0.8, y: 30 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        transition={{ duration: 0.4, ease: "easeOut" }}
-        className="absolute bottom-5 left-1/2 -translate-x-1/2 z-50 bg-blue-500/90 hover:bg-blue-600 text-white p-4 rounded-full shadow-2xl shadow-black/30 backdrop-blur-xl"
+        whileTap={{ scale: 0.9 }}
+        onClick={handleLocate}
+        className="absolute bottom-24 left-1/2 -translate-x-1/2 bg-white/20 backdrop-blur-2xl text-white p-4 rounded-full shadow-lg border border-white/10 hover:bg-white/30 transition-all"
       >
-        <Navigation className="w-6 h-6" />
+        <LocateFixed className="w-6 h-6" />
+      </motion.button>
+
+      {/* Burbuja ChatGPT */}
+      <AnimatePresence>
+        {showGPT && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.8, y: 30 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.8 }}
+            className="absolute bottom-32 right-6 w-80 bg-white/10 backdrop-blur-2xl border border-white/20 rounded-2xl p-4 text-white shadow-xl"
+          >
+            <h2 className="text-lg font-semibold mb-2">Asistente AI</h2>
+            <input
+              className="w-full p-2 rounded-lg bg-white/10 border border-white/20 mb-3 text-white placeholder-gray-300 focus:outline-none"
+              placeholder="Buscar ubicación..."
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            <button
+              onClick={handleAISearch}
+              className="w-full bg-blue-600 hover:bg-blue-700 rounded-lg p-2 font-medium"
+            >
+              Buscar con AI
+            </button>
+
+            {aiResponse && (
+              <div className="mt-3 bg-white/10 p-2 rounded-lg text-sm">
+                <p className="text-gray-300">{aiResponse}</p>
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Botón flotante ChatGPT */}
+      <motion.button
+        whileHover={{ scale: 1.1 }}
+        whileTap={{ scale: 0.9 }}
+        onClick={() => setShowGPT(!showGPT)}
+        className="absolute bottom-6 right-6 bg-gradient-to-br from-green-400 via-teal-400 to-blue-500 p-4 rounded-full shadow-lg hover:shadow-2xl transition-all"
+      >
+        <MessageCircle className="w-6 h-6 text-white" />
       </motion.button>
     </div>
   );
