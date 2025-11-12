@@ -1,166 +1,168 @@
 import React, { useEffect, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
-import { MagnifyingGlassIcon, NavigationIcon } from "lucide-react";
+import { Search, Navigation } from "lucide-react";
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
 export default function App() {
-  const mapContainer = useRef(null);
-  const map = useRef(null);
+  const mapContainerRef = useRef(null);
+  const mapRef = useRef(null);
   const [origin, setOrigin] = useState(null);
   const [destination, setDestination] = useState("");
   const [suggestions, setSuggestions] = useState([]);
   const [route, setRoute] = useState(null);
-  const [isNavigating, setIsNavigating] = useState(false);
-  const [userLocation, setUserLocation] = useState(null);
+  const [navigating, setNavigating] = useState(false);
 
-  // 🗺️ Initialize Mapbox
+  // Initialize map
   useEffect(() => {
-    if (map.current) return;
-    map.current = new mapboxgl.Map({
-      container: mapContainer.current,
-      style: "mapbox://styles/mapbox/navigation-day-v1",
-      center: [-74.08175, 4.60971], // Bogotá
+    if (mapRef.current) return;
+    mapRef.current = new mapboxgl.Map({
+      container: mapContainerRef.current,
+      style: "mapbox://styles/mapbox/streets-v12",
+      center: [-74.08175, 4.60971], // Bogotá default
       zoom: 12,
     });
 
-    // 🧭 Add user location control
+    // Geolocate control
     const geolocate = new mapboxgl.GeolocateControl({
       positionOptions: { enableHighAccuracy: true },
       trackUserLocation: true,
+      showAccuracyCircle: true,
       showUserHeading: true,
     });
-    map.current.addControl(geolocate);
 
-    geolocate.on("geolocate", (pos) => {
-      const coords = [pos.coords.longitude, pos.coords.latitude];
-      setOrigin(coords);
-      setUserLocation(coords);
-      map.current.flyTo({ center: coords, zoom: 14 });
+    mapRef.current.addControl(geolocate);
+    mapRef.current.addControl(new mapboxgl.NavigationControl(), "top-right");
+
+    geolocate.on("geolocate", (e) => {
+      const { longitude, latitude } = e.coords;
+      setOrigin([longitude, latitude]);
+      mapRef.current.flyTo({ center: [longitude, latitude], zoom: 14 });
     });
   }, []);
 
-  // 📍 Suggest logic (Colombia places)
-  useEffect(() => {
-    if (!destination.trim()) {
+  // Get suggestions from Mapbox API
+  const handleSuggest = async (query) => {
+    setDestination(query);
+    if (query.length < 2) {
       setSuggestions([]);
       return;
     }
 
-    const fetchSuggestions = async () => {
+    try {
       const res = await fetch(
-        `https://api.mapbox.com/geocoding/v5/mapbox.places/${destination}.json?proximity=-74.08175,4.60971&country=co&limit=5&access_token=${mapboxgl.accessToken}`
+        `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
+          query
+        )}.json?access_token=${mapboxgl.accessToken}&autocomplete=true&country=CO&limit=5`
       );
       const data = await res.json();
       setSuggestions(data.features || []);
-    };
-
-    const delay = setTimeout(fetchSuggestions, 400);
-    return () => clearTimeout(delay);
-  }, [destination]);
-
-  // 📍 Route planning
-  const planRoute = async (destCoords) => {
-    if (!origin) {
-      alert("First get your current location 📍");
-      return;
+    } catch (err) {
+      console.error("Geocoding error:", err);
     }
-    const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${origin[0]},${origin[1]};${destCoords[0]},${destCoords[1]}?steps=true&geometries=geojson&access_token=${mapboxgl.accessToken}`;
+  };
 
-    const res = await fetch(url);
-    const data = await res.json();
-    const routeData = data.routes[0].geometry;
-    setRoute(routeData);
+  // Select suggestion and plan route
+  const handleSelect = async (place) => {
+    setDestination(place.place_name);
+    setSuggestions([]);
 
-    if (map.current.getSource("route")) {
-      map.current.getSource("route").setData({
-        type: "Feature",
-        geometry: routeData,
-      });
-    } else {
-      map.current.addSource("route", {
+    const coords = place.geometry.coordinates;
+    if (!origin) return alert("Please allow location access first.");
+
+    try {
+      const res = await fetch(
+        `https://api.mapbox.com/directions/v5/mapbox/driving/${origin[0]},${origin[1]};${coords[0]},${coords[1]}?steps=true&geometries=geojson&access_token=${mapboxgl.accessToken}`
+      );
+      const data = await res.json();
+      const routeData = data.routes[0].geometry.coordinates;
+
+      // Draw route on map
+      if (mapRef.current.getSource("route")) {
+        mapRef.current.removeLayer("route");
+        mapRef.current.removeSource("route");
+      }
+      mapRef.current.addSource("route", {
         type: "geojson",
-        data: { type: "Feature", geometry: routeData },
+        data: {
+          type: "Feature",
+          geometry: { type: "LineString", coordinates: routeData },
+        },
       });
-      map.current.addLayer({
+      mapRef.current.addLayer({
         id: "route",
         type: "line",
         source: "route",
         paint: { "line-color": "#007AFF", "line-width": 5 },
       });
-    }
 
-    map.current.fitBounds([
-      [origin[0], origin[1]],
-      [destCoords[0], destCoords[1]],
-    ], { padding: 50 });
+      mapRef.current.flyTo({ center: coords, zoom: 13 });
+      setRoute(routeData);
+    } catch (err) {
+      console.error("Route planning error:", err);
+    }
   };
 
-  // 🚗 Start navigation simulation
-  const startNavigation = () => {
-    if (!route) {
-      alert("Please plan a route first 🚧");
-      return;
-    }
-    setIsNavigating(true);
-    alert("Navigation started (simulated). Follow the route on map!");
+  // Simulate navigation
+  const handleNavigate = () => {
+    if (!route) return alert("Plan a route first!");
+    setNavigating(true);
+
+    let i = 0;
+    const interval = setInterval(() => {
+      if (i >= route.length) {
+        clearInterval(interval);
+        setNavigating(false);
+        return;
+      }
+      mapRef.current.flyTo({ center: route[i], zoom: 15 });
+      i++;
+    }, 1000);
   };
 
   return (
-    <div className="relative w-screen h-screen">
-      {/* Map */}
-      <div ref={mapContainer} className="absolute inset-0 z-0" />
+    <div className="relative h-screen w-screen">
+      <div ref={mapContainerRef} className="absolute inset-0" />
 
-      {/* Glass UI Overlay */}
-      <div className="absolute top-4 left-1/2 -translate-x-1/2 w-11/12 max-w-lg backdrop-blur-xl bg-white/30 border border-white/20 shadow-xl rounded-2xl p-4 z-20">
-        <div className="flex items-center space-x-2">
-          <MagnifyingGlassIcon className="w-5 h-5 text-white" />
+      {/* Glass UI */}
+      <div className="absolute top-4 left-4 right-4 mx-auto max-w-md backdrop-blur-2xl bg-white/30 rounded-3xl p-4 shadow-lg border border-white/20 flex flex-col gap-2">
+        <div className="flex items-center gap-2">
+          <Search className="text-gray-700" />
           <input
             type="text"
+            placeholder="Buscar destino..."
             value={destination}
-            onChange={(e) => setDestination(e.target.value)}
-            placeholder="Enter destination..."
-            className="w-full bg-transparent text-white placeholder-white/70 outline-none"
+            onChange={(e) => handleSuggest(e.target.value)}
+            className="flex-1 bg-transparent outline-none placeholder-gray-700 text-gray-900"
           />
         </div>
 
+        {/* Suggestions list */}
         {suggestions.length > 0 && (
-          <div className="mt-2 bg-white/80 rounded-xl overflow-hidden">
-            {suggestions.map((s) => (
-              <div
-                key={s.id}
-                onClick={() => {
-                  setDestination(s.place_name);
-                  setSuggestions([]);
-                  planRoute(s.center);
-                }}
-                className="p-2 cursor-pointer hover:bg-white/60"
+          <ul className="bg-white/60 rounded-xl overflow-hidden mt-2 max-h-48 overflow-y-auto">
+            {suggestions.map((s, i) => (
+              <li
+                key={i}
+                onClick={() => handleSelect(s)}
+                className="px-3 py-2 cursor-pointer hover:bg-white/80"
               >
                 {s.place_name}
-              </div>
+              </li>
             ))}
-          </div>
+          </ul>
         )}
-      </div>
 
-      {/* Bottom Controls */}
-      <div className="absolute bottom-6 left-0 right-0 flex justify-center space-x-4 z-20">
-        <button
-          onClick={() => {
-            if (userLocation) map.current.flyTo({ center: userLocation, zoom: 15 });
-          }}
-          className="px-4 py-2 bg-white/40 backdrop-blur-xl rounded-full text-white shadow-lg"
-        >
-          📍 My Location
-        </button>
-
-        <button
-          onClick={startNavigation}
-          className="px-4 py-2 bg-blue-600 rounded-full text-white shadow-lg flex items-center gap-2"
-        >
-          <NavigationIcon size={18} /> Start Navigation
-        </button>
+        <div className="flex justify-between mt-3">
+          <button
+            onClick={handleNavigate}
+            disabled={!route || navigating}
+            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-2xl transition-all disabled:opacity-50"
+          >
+            <Navigation className="w-4 h-4" />
+            {navigating ? "Navegando..." : "Iniciar navegación"}
+          </button>
+        </div>
       </div>
     </div>
   );
