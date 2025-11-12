@@ -1,228 +1,525 @@
-import React, { useState, useEffect, useRef } from "react";
+// src/App.jsx
+import React, { useEffect, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
-import "./index.css";
 
-mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
+// Make sure VITE_MAPBOX_TOKEN exists in your .env
+mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN || "";
 
-const App = () => {
-  const mapContainer = useRef(null);
-  const map = useRef(null);
-  const [lng, setLng] = useState(-74.08175);
-  const [lat, setLat] = useState(4.60971);
-  const [zoom, setZoom] = useState(12);
-  const [origin, setOrigin] = useState(null);
-  const [destination, setDestination] = useState("");
+const MAJOR_COLOMBIAN_CITIES = [
+  "Bogotá",
+  "Medellín",
+  "Cali",
+  "Cartagena",
+  "Barranquilla",
+  "Bucaramanga",
+  "Santa Marta",
+  "Pereira",
+  "Manizales",
+  "Villavicencio",
+  "Cúcuta",
+];
+
+export default function App() {
+  const mapContainerRef = useRef(null);
+  const mapRef = useRef(null);
+  const routeLayerId = "horizon-route-line";
+  const [queryDest, setQueryDest] = useState("");
+  const [queryOrigin, setQueryOrigin] = useState("");
   const [suggestions, setSuggestions] = useState([]);
-  const [route, setRoute] = useState(null);
+  const [originCoords, setOriginCoords] = useState(null); // [lng, lat]
+  const [destCoords, setDestCoords] = useState(null); // [lng, lat]
+  const [routeData, setRouteData] = useState(null); // Mapbox directions route object
+  const [steps, setSteps] = useState([]); // turn-by-turn steps
+  const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [navigating, setNavigating] = useState(false);
-  const [instruction, setInstruction] = useState("");
+  const [isMobile, setIsMobile] = useState(false);
 
-  const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+  const userMarkerRef = useRef(null);
+  const navWatchIdRef = useRef(null);
+  const debounceRef = useRef(null);
 
-  // 🗺️ Initialize map
+  // --- Init map
   useEffect(() => {
-    if (map.current) return;
-    map.current = new mapboxgl.Map({
-      container: mapContainer.current,
-      style: "mapbox://styles/mapbox/navigation-day-v1",
-      center: [lng, lat],
-      zoom: zoom,
+    setIsMobile(/Mobi|Android/i.test(navigator.userAgent));
+
+    if (mapRef.current) return;
+    mapRef.current = new mapboxgl.Map({
+      container: mapContainerRef.current,
+      style: "mapbox://styles/mapbox/dark-v11",
+      center: [-74.0817, 4.6097], // Bogotá default
+      zoom: 11,
     });
 
-    const geolocate = new mapboxgl.GeolocateControl({
+    // Add controls
+    mapRef.current.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), "top-right");
+
+    // custom "liquid glass" user cursor element CSS inserted below
+    // start geolocation tracking for UX (not yet used as origin until user clicks or we auto-set)
+    const geolocateControl = new mapboxgl.GeolocateControl({
       positionOptions: { enableHighAccuracy: true },
       trackUserLocation: true,
-      showUserHeading: true,
       showAccuracyCircle: false,
     });
+    mapRef.current.addControl(geolocateControl, "top-right");
 
-    map.current.addControl(geolocate, "bottom-right");
-
-    geolocate.on("geolocate", (pos) => {
-      const { longitude, latitude } = pos.coords;
-      setOrigin([longitude, latitude]);
-      setLng(longitude);
-      setLat(latitude);
+    // When geolocate triggers, set origin to "My Location" and update marker
+    geolocateControl.on("geolocate", (pos) => {
+      const coords = [pos.coords.longitude, pos.coords.latitude];
+      setOriginCoords(coords);
+      setQueryOrigin("Mi ubicación");
+      placeOrMoveUserMarker(coords);
     });
+
+    return () => {
+      if (mapRef.current) mapRef.current.remove();
+      mapRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 🔍 Suggestions for destination
-  const fetchSuggestions = async (query) => {
-    if (query.length < 3) {
+  // --- Helper: place or move the custom user marker
+  function placeOrMoveUserMarker(coords) {
+    if (!mapRef.current) return;
+    if (userMarkerRef.current) {
+      userMarkerRef.current.setLngLat(coords);
+    } else {
+      const el = document.createElement("div");
+      el.className = "horizon-user-marker";
+      userMarkerRef.current = new mapboxgl.Marker({ element: el }).setLngLat(coords).addTo(mapRef.current);
+    }
+  }
+
+  // --- Debounced suggestion fetch
+  const fetchSuggestionsDebounced = (value, isOrigin = false) => {
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => fetchSuggestions(value, isOrigin), 300);
+  };
+
+  // --- Get suggestions from Mapbox with Colombia filter and major cities prioritized
+  async function fetchSuggestions(value, isOrigin = false) {
+    if (!value || value.trim().length < 2) {
       setSuggestions([]);
       return;
     }
-    const res = await fetch(
-      `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
-        query
-      )}.json?country=CO&autocomplete=true&limit=5&access_token=${mapboxgl.accessToken}`
-    );
-    const data = await res.json();
-    setSuggestions(
-      data.features.map((place) => ({
-        name: place.place_name,
-        coords: place.geometry.coordinates,
-      }))
-    );
-  };
 
-  // 🧭 Plan route
-  const planRoute = async (destCoords) => {
-    if (!origin || !destCoords) return;
-    const res = await fetch(
-      `https://api.mapbox.com/directions/v5/mapbox/driving/${origin[0]},${origin[1]};${destCoords[0]},${destCoords[1]}?steps=true&geometries=geojson&language=es&access_token=${mapboxgl.accessToken}`
-    );
-    const data = await res.json();
-    const routeData = data.routes[0];
-    setRoute(routeData);
+    const token = mapboxgl.accessToken;
+    const encoded = encodeURIComponent(value);
+    // Bias to Colombia and limited results
+    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encoded}.json?access_token=${token}&autocomplete=true&country=CO&limit=6`;
 
-    if (map.current.getSource("route")) {
-      map.current.getSource("route").setData({
-        type: "Feature",
-        geometry: routeData.geometry,
-      });
-    } else {
-      map.current.addLayer({
-        id: "route",
-        type: "line",
-        source: {
-          type: "geojson",
-          data: {
-            type: "Feature",
-            geometry: routeData.geometry,
-          },
-        },
-        layout: { "line-join": "round", "line-cap": "round" },
-        paint: { "line-color": "#007aff", "line-width": 6, "line-opacity": 0.85 },
-      });
+    try {
+      const res = await fetch(url);
+      const json = await res.json();
+      const features = (json && json.features) || [];
+
+      // Map Mapbox features to unified suggestion objects
+      const mapboxSuggestions = features.map((f) => ({
+        id: f.id,
+        name: f.place_name,
+        center: f.center,
+        source: "mapbox",
+      }));
+
+      // Add matching major cities first if they contain the query
+      const cityMatches = MAJOR_COLOMBIAN_CITIES.filter((c) =>
+        c.toLowerCase().includes(value.toLowerCase())
+      ).map((c) => ({ id: `city-${c}`, name: `${c}, Colombia`, center: null, source: "city" }));
+
+      // Place city matches first, then mapbox results (de-dupe by name)
+      const combined = [
+        ...cityMatches,
+        ...mapboxSuggestions.filter((m) => !cityMatches.some((c) => c.name === m.name)),
+      ].slice(0, 6);
+
+      setSuggestions(combined);
+    } catch (err) {
+      console.error("Suggestions error", err);
+      setSuggestions([]);
     }
+  }
 
-    map.current.fitBounds([
-      [origin[0], origin[1]],
-      [destCoords[0], destCoords[1]],
-    ], { padding: 50 });
+  // --- When user chooses a suggestion
+  const selectSuggestion = async (sugg, isOrigin = false) => {
+    setSuggestions([]);
+    if (!sugg) return;
+
+    if (sugg.center) {
+      // Mapbox returned coordinates
+      if (isOrigin) {
+        setOriginCoords(sugg.center);
+        setQueryOrigin(sugg.name);
+        placeOrMoveUserMarker(sugg.center);
+        mapRef.current.flyTo({ center: sugg.center, zoom: 13 });
+      } else {
+        setDestCoords(sugg.center);
+        setQueryDest(sugg.name);
+        mapRef.current.flyTo({ center: sugg.center, zoom: 13 });
+      }
+    } else {
+      // It's one of our major city placeholders: geocode it
+      const token = mapboxgl.accessToken;
+      const encoded = encodeURIComponent(sugg.name.replace(", Colombia", ""));
+      try {
+        const res = await fetch(
+          `https://api.mapbox.com/geocoding/v5/mapbox.places/${encoded}.json?access_token=${token}&country=CO&limit=1`
+        );
+        const json = await res.json();
+        const f = json.features && json.features[0];
+        if (!f) return;
+        const center = f.center;
+        if (isOrigin) {
+          setOriginCoords(center);
+          setQueryOrigin(sugg.name);
+          placeOrMoveUserMarker(center);
+        } else {
+          setDestCoords(center);
+          setQueryDest(sugg.name);
+        }
+        mapRef.current.flyTo({ center, zoom: 12 });
+      } catch (err) {
+        console.error("Geocode fallback error", err);
+      }
+    }
   };
 
-  // 🗣️ Speak instruction (optional)
-  const speak = (text) => {
-    const utter = new SpeechSynthesisUtterance(text);
-    utter.lang = "es-CO";
-    speechSynthesis.speak(utter);
+  // --- Build a route using Mapbox Directions API
+  const planRoute = async () => {
+    if (!originCoords || !destCoords) {
+      alert("Selecciona origen y destino válidos.");
+      return;
+    }
+    const token = mapboxgl.accessToken;
+    const from = `${originCoords[0]},${originCoords[1]}`;
+    const to = `${destCoords[0]},${destCoords[1]}`;
+    const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${from};${to}?steps=true&geometries=geojson&overview=full&access_token=${token}&language=es`;
+
+    try {
+      const res = await fetch(url);
+      const json = await res.json();
+      if (!json.routes || !json.routes.length) {
+        alert("No se encontró ruta.");
+        return;
+      }
+      const route = json.routes[0];
+      setRouteData(route);
+      // set steps for instructions
+      const legs = route.legs && route.legs[0];
+      setSteps((legs && legs.steps) || []);
+      setCurrentStepIndex(0);
+
+      // draw route line
+      const coords = route.geometry.coordinates;
+      if (mapRef.current.getSource("horizon-route")) {
+        mapRef.current.getSource("horizon-route").setData({
+          type: "Feature",
+          geometry: { type: "LineString", coordinates: coords },
+        });
+      } else {
+        mapRef.current.addSource("horizon-route", {
+          type: "geojson",
+          data: { type: "Feature", geometry: { type: "LineString", coordinates: coords } },
+        });
+        // route line
+        mapRef.current.addLayer({
+          id: routeLayerId,
+          type: "line",
+          source: "horizon-route",
+          layout: { "line-join": "round", "line-cap": "round" },
+          paint: { "line-color": ["interpolate", ["linear"], ["get", "progress"], 0, "#60a5fa", 1, "#7c3aed"], "line-width": 6, "line-opacity": 0.9 },
+        });
+      }
+
+      // Add origin/destination markers
+      addOrUpdateMarker("horizon-origin-marker", originCoords, "#34d399");
+      addOrUpdateMarker("horizon-dest-marker", destCoords, "#fb7185");
+
+      // Fit bounds
+      const bounds = coords.reduce((b, c) => b.extend(c), new mapboxgl.LngLatBounds(coords[0], coords[0]));
+      mapRef.current.fitBounds(bounds, { padding: 80 });
+    } catch (err) {
+      console.error("Plan route error", err);
+      alert("Error al planificar la ruta.");
+    }
   };
 
-  // 🚗 Real navigation (mobile only)
+  // --- Utility: add or update a simple colored marker
+  function addOrUpdateMarker(id, coords, color = "#fff") {
+    if (!mapRef.current) return;
+    // store marker elements on the map object under a property name
+    const key = `marker_${id}`;
+    if (mapRef.current[key]) {
+      mapRef.current[key].setLngLat(coords);
+    } else {
+      const el = document.createElement("div");
+      el.className = "horizon-simple-marker";
+      el.style.background = color;
+      mapRef.current[key] = new mapboxgl.Marker({ element: el }).setLngLat(coords).addTo(mapRef.current);
+    }
+  }
+
+  // --- Start navigation: watchPosition and update current step as user moves
   const startNavigation = () => {
-    if (!route || !isMobile) {
-      alert("Navegación solo disponible en móviles 📱");
+    if (!routeData || !steps || steps.length === 0) {
+      alert("Primero planifica la ruta.");
+      return;
+    }
+    if (!("geolocation" in navigator)) {
+      alert("El dispositivo no soporta geolocalización.");
       return;
     }
 
     setNavigating(true);
-    const steps = route.legs[0].steps;
-    let currentStep = 0;
 
+    // follow position
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
-        const { longitude, latitude } = pos.coords;
-        const userPos = [longitude, latitude];
-
-        map.current.flyTo({ center: userPos, zoom: 15, speed: 1.2 });
-
-        // Check if user is near the next maneuver
-        const step = steps[currentStep];
-        const [targetLng, targetLat] = step.maneuver.location;
-        const dist = Math.sqrt(
-          Math.pow(targetLng - longitude, 2) + Math.pow(targetLat - latitude, 2)
-        );
-
-        if (dist < 0.0005 && currentStep < steps.length - 1) {
-          currentStep++;
-          const nextInstruction = steps[currentStep].maneuver.instruction;
-          setInstruction(nextInstruction);
-          speak(nextInstruction);
+        const lng = pos.coords.longitude;
+        const lat = pos.coords.latitude;
+        const userPos = [lng, lat];
+        placeOrMoveUserMarker(userPos);
+        // center if mobile and navigating
+        if (isMobile) {
+          mapRef.current.easeTo({ center: userPos, zoom: 15, duration: 1000 });
         }
 
-        // End navigation
-        if (currentStep >= steps.length - 1) {
-          setInstruction("Has llegado a tu destino 🎉");
-          speak("Has llegado a tu destino");
-          navigator.geolocation.clearWatch(watchId);
-          setNavigating(false);
+        // Determine proximity to next step's maneuver
+        const current = steps[currentStepIndex];
+        if (!current) return;
+        const [tLng, tLat] = current.maneuver.location;
+        const distance = haversineDistance([lat, lng], [tLat, tLng]); // km
+
+        // If within ~30 meters, advance to next step
+        if (distance < 0.03 && currentStepIndex < steps.length - 1) {
+          setCurrentStepIndex((i) => i + 1);
         }
       },
-      (err) => console.error("Error de geolocalización:", err),
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+      (err) => {
+        console.error("watchPosition error", err);
+        alert("No se pudo obtener la ubicación en vivo.");
+      },
+      { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 }
+    );
+
+    navWatchIdRef.current = watchId;
+  };
+
+  // --- Stop navigation
+  const stopNavigation = () => {
+    if (navWatchIdRef.current != null) {
+      navigator.geolocation.clearWatch(navWatchIdRef.current);
+      navWatchIdRef.current = null;
+    }
+    setNavigating(false);
+  };
+
+  // --- small haversine distance helper (returns km)
+  function haversineDistance([lat1, lon1], [lat2, lon2]) {
+    const toRad = (v) => (v * Math.PI) / 180;
+    const R = 6371; // km
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  }
+
+  // --- Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      clearTimeout(debounceRef.current);
+      if (navWatchIdRef.current != null) navigator.geolocation.clearWatch(navWatchIdRef.current);
+      if (userMarkerRef.current) {
+        try {
+          userMarkerRef.current.remove();
+        } catch {}
+      }
+      // remove route layer if present
+      if (mapRef.current && mapRef.current.getLayer && mapRef.current.getLayer(routeLayerId)) {
+        try {
+          mapRef.current.removeLayer(routeLayerId);
+          mapRef.current.removeSource("horizon-route");
+        } catch {}
+      }
+    };
+  }, []);
+
+  // --- UI handlers
+  const onDestInput = (e) => {
+    setQueryDest(e.target.value);
+    fetchSuggestionsDebounced(e.target.value, false);
+  };
+  const onOriginInput = (e) => {
+    setQueryOrigin(e.target.value);
+    fetchSuggestionsDebounced(e.target.value, true);
+  };
+
+  // allow quick set of origin to current location
+  const setOriginToCurrent = () => {
+    if (!("geolocation" in navigator)) return alert("Geolocation not supported.");
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const coords = [pos.coords.longitude, pos.coords.latitude];
+        setOriginCoords(coords);
+        setQueryOrigin("Mi ubicación");
+        placeOrMoveUserMarker(coords);
+        mapRef.current.flyTo({ center: coords, zoom: 14 });
+      },
+      (err) => alert("Permiso denegado o no disponible.")
     );
   };
 
   return (
-    <div className="relative w-screen h-screen">
-      <div ref={mapContainer} className="w-full h-full" />
+    <div className="w-screen h-screen bg-gradient-to-br from-blue-900 via-indigo-900 to-violet-900 text-white relative">
+      {/* Map container */}
+      <div ref={mapContainerRef} className="absolute inset-0" />
 
-      {/* 🔍 Destination Search */}
-      <div className="absolute top-4 left-1/2 -translate-x-1/2 w-80 bg-white/30 backdrop-blur-xl rounded-2xl p-3 shadow-lg">
-        <input
-          type="text"
-          placeholder="¿A dónde vas?"
-          value={destination}
-          onChange={(e) => {
-            setDestination(e.target.value);
-            fetchSuggestions(e.target.value);
-          }}
-          className="w-full p-2 rounded-lg bg-transparent focus:outline-none"
-        />
+      {/* Liquid glass UI panel */}
+      <div className="absolute top-5 left-1/2 -translate-x-1/2 w-[92%] md:w-[720px] p-4 rounded-3xl bg-white/10 backdrop-blur-xl border border-white/20 shadow-2xl z-50">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl md:text-2xl font-semibold">🌍 HorizonMaps</h1>
+            <p className="text-xs text-white/80">Plan and navigate — optimized for Colombia</p>
+          </div>
+
+          <div className="flex gap-2 items-center">
+            <button
+              onClick={() => {
+                // refresh map tokens or info if needed
+                alert("HorizonMaps — ready");
+              }}
+              className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 transition"
+            >
+              ⚙️
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-3 grid grid-cols-1 md:grid-cols-[1fr_1fr] gap-3">
+          <div>
+            <label className="text-xs text-white/80">Origen</label>
+            <div className="relative">
+              <input
+                value={queryOrigin}
+                onChange={onOriginInput}
+                placeholder="Mi ubicación or type an origin"
+                className="w-full p-3 rounded-xl bg-white/10 placeholder-white/60 focus:outline-none"
+              />
+              <button
+                onClick={setOriginToCurrent}
+                title="Use current location"
+                className="absolute right-2 top-2 bg-cyan-600 p-2 rounded-lg hover:scale-105 transition"
+              >
+                📍
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-xs text-white/80">Destino</label>
+            <div className="relative">
+              <input
+                value={queryDest}
+                onChange={onDestInput}
+                placeholder="Where to?"
+                className="w-full p-3 rounded-xl bg-white/10 placeholder-white/60 focus:outline-none"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Suggestions dropdown */}
         {suggestions.length > 0 && (
-          <ul className="bg-white/70 rounded-xl mt-2 max-h-40 overflow-y-auto">
-            {suggestions.map((s, i) => (
-              <li
-                key={i}
+          <div className="mt-3 max-h-56 overflow-auto bg-black/60 rounded-xl border border-white/10 p-1">
+            {suggestions.map((s) => (
+              <div
+                key={s.id}
                 onClick={() => {
-                  setDestination(s.name);
-                  planRoute(s.coords);
-                  setSuggestions([]);
+                  // choose depending on whether dropdown used for origin or destination.
+                  // If the last typed box was dest (queryDest) => treat as dest else origin
+                  const recentDest = document.activeElement === document.querySelector("input[placeholder='Where to?']");
+                  selectSuggestion(s, recentDest ? false : true);
                 }}
-                className="p-2 hover:bg-blue-100 cursor-pointer"
+                className="px-3 py-2 hover:bg-white/10 cursor-pointer rounded-md text-sm"
               >
                 {s.name}
-              </li>
+              </div>
             ))}
-          </ul>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="mt-4 flex gap-3">
+          <button
+            onClick={planRoute}
+            className="flex-1 bg-blue-600 hover:bg-blue-700 py-2 rounded-xl font-medium"
+          >
+            🗺️ Plan Route
+          </button>
+
+          {!navigating ? (
+            <button onClick={startNavigation} className="bg-green-600 hover:bg-green-700 py-2 px-4 rounded-xl font-medium">
+              ▶️ Start Nav
+            </button>
+          ) : (
+            <button onClick={stopNavigation} className="bg-red-600 hover:bg-red-700 py-2 px-4 rounded-xl font-medium">
+              ⏹ Stop
+            </button>
+          )}
+        </div>
+
+        {/* Route summary */}
+        {routeData && (
+          <div className="mt-3 text-sm bg-white/5 p-3 rounded-xl border border-white/10">
+            <div className="flex justify-between">
+              <div>Distance: {(routeData.distance / 1000).toFixed(1)} km</div>
+              <div>ETA: {Math.round(routeData.duration / 60)} min</div>
+            </div>
+          </div>
+        )}
+
+        {/* Instructions list */}
+        {steps && steps.length > 0 && (
+          <div className="mt-3 max-h-36 overflow-auto bg-white/5 p-3 rounded-xl border border-white/6 text-sm">
+            <div className="font-semibold mb-2">Directions</div>
+            {steps.map((step, idx) => (
+              <div
+                key={idx}
+                className={`py-1 ${idx === currentStepIndex ? "text-amber-300" : "text-white/80"} ${
+                  idx === currentStepIndex ? "font-semibold" : ""
+                }`}
+              >
+                {idx + 1}. {step.maneuver.instruction}
+              </div>
+            ))}
+          </div>
         )}
       </div>
 
-      {/* 📍 My Location */}
-      <button
-        onClick={() => {
-          if (origin) map.current.flyTo({ center: origin, zoom: 15 });
-          else navigator.geolocation.getCurrentPosition((pos) => {
-            const { longitude, latitude } = pos.coords;
-            setOrigin([longitude, latitude]);
-            map.current.flyTo({ center: [longitude, latitude], zoom: 15 });
-          });
-        }}
-        className="absolute bottom-24 right-4 bg-blue-600 text-white p-3 rounded-full shadow-lg hover:scale-110 transition"
-      >
-        📍
-      </button>
-
-      {/* ▶️ Start Navigation */}
-      <button
-        onClick={startNavigation}
-        disabled={!route || navigating}
-        className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-green-600 text-white px-6 py-3 rounded-2xl shadow-lg hover:bg-green-700 transition"
-      >
-        {navigating ? "Navegando..." : "Iniciar Navegación"}
-      </button>
-
-      {/* 🔊 Current Instruction */}
-      {navigating && instruction && (
-        <div className="absolute bottom-40 left-1/2 -translate-x-1/2 bg-white/80 backdrop-blur-md px-4 py-3 rounded-xl text-center shadow-lg text-black font-medium w-72">
-          {instruction}
-        </div>
-      )}
+      {/* Liquid-glass user marker CSS + small styling for simple markers */}
+      <style>{`
+        .horizon-user-marker {
+          width: 20px;
+          height: 20px;
+          border-radius: 50%;
+          background: radial-gradient(circle at 30% 30%, rgba(0,255,255,0.95), rgba(0,100,255,0.8));
+          box-shadow: 0 0 18px rgba(0,200,255,0.9);
+          border: 2px solid rgba(255,255,255,0.6);
+          animation: pulse 1.4s infinite alternate;
+        }
+        @keyframes pulse {
+          from { transform: scale(0.9); opacity: 0.95; }
+          to { transform: scale(1.3); opacity: 0.75; }
+        }
+        .horizon-simple-marker {
+          width: 14px;
+          height: 14px;
+          border-radius: 50%;
+          border: 2px solid rgba(255,255,255,0.9);
+        }
+      `}</style>
     </div>
   );
-};
-
-export default App;
+}
