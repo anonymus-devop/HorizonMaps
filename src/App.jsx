@@ -114,7 +114,7 @@ export default function App() {
 
             {/* Barra de búsqueda */}
             <input
-              className="w-full p-3 text-sm rounded-xl bg-white/10 border border-white/20 placeholder-gray-300 text-white focus:outline-none"
+              className="w-full p-3 text-sm rounded-xl bg-white/10 border border-white/20 placeholder-gray-300 text-black focus:outline-none"
               placeholder="Buscar ubicación..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
