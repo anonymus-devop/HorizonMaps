@@ -1,14 +1,10 @@
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
 
-// Configuración lista para Capacitor y Mapbox
 export default defineConfig({
   plugins: [react()],
-  server: {
-    host: true,
-    port: 5173,
-  },
+  base: "/HorizonMaps/", // 👈 importante para GitHub Pages
   build: {
-    outDir: 'dist',
+    outDir: "dist",
   },
 });
