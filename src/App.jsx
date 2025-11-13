@@ -143,7 +143,7 @@ export default function App() {
         onClick={() => setShowGPT((x) => !x)}
         className="absolute bottom-6 right-6 bg-gradient-to-br from-green-400 via-teal-400 to-blue-500 p-4 rounded-full shadow-xl hover:shadow-2xl"
       >
-        <MessageCircle className="w-6 h-6 text-white" />
+        <MessageCircle className="w-6 h-6 text-black" />
       </motion.button>
     </div>
   );
