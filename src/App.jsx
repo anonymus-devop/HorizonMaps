@@ -108,7 +108,7 @@ export default function App() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 40, scale: 0.9 }}
             transition={{ type: "spring", stiffness: 160, damping: 14 }}
-            className="absolute bottom-32 right-6 w-80 bg-white/10 backdrop-blur-2xl border border-white/20 rounded-2xl p-4 text-white shadow-2xl"
+            className="absolute bottom-32 right-6 w-80 bg-white/10 backdrop-blur-2xl border border-white/20 rounded-2xl p-4 text-black shadow-2xl"
           >
             <h2 className="text-lg font-semibold mb-2">Asistente AI</h2>
 
