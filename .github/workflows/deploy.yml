@@ -30,8 +30,7 @@ jobs:
           npm install
           npm install @turf/turf mapbox-gl raf
           npm install -g @bubblewrap/cli
-          npm install vite-plugin-pwa --save-dev lucide-react framer-motion vite-plugin-pwa 
-          npm install @mapbox/mapbox-sdk geolib framer-motion lucide-react react-aria react-aria-components axios qs zustand compass-heading deviceorientation three @react-three/fiber @react-three/drei @capacitor/core@capacitor/cli @capacitor/android @capacitor/ios @capacitor/geolocation @capacitor/device @capacitor/haptics @capacitor/camera
+          npm install vite-plugin-pwa --save-dev lucide-react framer-motion
       - name: Install MapBox
         run: npm install mapbox-gl
       - name: Build project
