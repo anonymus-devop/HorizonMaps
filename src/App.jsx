@@ -97,6 +97,9 @@ export default function App() {
   const [trackingId, setTrackingId] = useState(null);
   const [following, setFollowing] = useState(true); // if true center on user while nav
 
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState(null);
+
   /* ---------- Init Map ---------- */
   useEffect(() => {
     setIsMobile(/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent));
@@ -107,11 +110,13 @@ export default function App() {
       style: "mapbox://styles/mapbox/dark-v11",
       center: DEFAULT_CENTER,
       zoom: 12,
+      pitch: 45, // Add pitch for 3D feel
+      bearing: 0,
     });
     mapRef.current = map;
 
     // Add default controls
-    map.addControl(new mapboxgl.NavigationControl(), "top-right");
+    map.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), "top-right");
 
     map.on("load", () => {
       setReady(true);
@@ -123,10 +128,17 @@ export default function App() {
             setOrigin(coords);
             placeOriginMarker(coords);
             placeUserMarker(coords);
-            flyTo(coords, 13, { animate: false });
+            flyTo(coords, 14, { animate: false });
           },
-          () => {},
-          { enableHighAccuracy: true, maximumAge: 60_000 }
+          (err) => {
+            console.warn("Geolocation error, using default location (Bogotá):", err);
+            // Fallback to Bogotá if GPS fails
+            setOrigin(DEFAULT_CENTER);
+            placeOriginMarker(DEFAULT_CENTER);
+            placeUserMarker(DEFAULT_CENTER);
+            flyTo(DEFAULT_CENTER, 12, { animate: false });
+          },
+          { enableHighAccuracy: false, timeout: 10000, maximumAge: 60_000 }
         );
       }
     });
@@ -135,7 +147,7 @@ export default function App() {
     return () => {
       try {
         map.remove();
-      } catch (e) {}
+      } catch (e) { }
       mapRef.current = null;
     };
   }, []);
@@ -148,6 +160,7 @@ export default function App() {
     el.style.borderRadius = "50%";
     el.style.background = color;
     el.style.border = "2px solid rgba(255,255,255,0.95)";
+    el.style.boxShadow = `0 0 10px ${color}`;
     if (pulse) el.style.animation = "hmPulse 1.5s infinite alternate";
     return el;
   }
@@ -157,7 +170,7 @@ export default function App() {
     if (userMarkerRef.current) {
       userMarkerRef.current.setLngLat([lng, lat]);
     } else {
-      userMarkerRef.current = new mapboxgl.Marker({ element: createDotElement(16, "#00E5FF", true) })
+      userMarkerRef.current = new mapboxgl.Marker({ element: createDotElement(20, "#00E5FF", true) })
         .setLngLat([lng, lat])
         .addTo(mapRef.current);
     }
@@ -207,7 +220,26 @@ export default function App() {
           type: "line",
           source: routeSourceId,
           layout: { "line-join": "round", "line-cap": "round" },
-          paint: { "line-color": "#60a5fa", "line-width": 6, "line-opacity": 0.95 },
+          paint: {
+            "line-color": "#38bdf8", // Sky blue
+            "line-width": 6,
+            "line-opacity": 0.9,
+            "line-blur": 1
+          },
+        });
+        // Add a glow effect layer
+        mapRef.current.addLayer({
+          id: routeLayerId + "-glow",
+          type: "line",
+          source: routeSourceId,
+          layout: { "line-join": "round", "line-cap": "round" },
+          paint: {
+            "line-color": "#0ea5e9",
+            "line-width": 12,
+            "line-opacity": 0.4,
+            "line-blur": 4
+          },
+          beforeId: routeLayerId
         });
       }
     } catch (e) {
@@ -217,8 +249,8 @@ export default function App() {
 
   function flyTo([lng, lat], zoom = 15, opts = { animate: true }) {
     try {
-      mapRef.current?.flyTo({ center: [lng, lat], zoom, speed: 0.8, curve: 1.4, essential: true });
-    } catch (e) {}
+      mapRef.current?.flyTo({ center: [lng, lat], zoom, speed: 1.2, curve: 1.42, essential: true, pitch: 50 });
+    } catch (e) { }
   }
 
   /* ---------- Suggestions (Mapbox geocoding) ---------- */
@@ -272,6 +304,7 @@ export default function App() {
       placeDestMarker(coords);
       flyTo(coords);
       speak(`${city} seleccionado`);
+      setQuery(city);
       return;
     }
     const coords = s.center;
@@ -279,13 +312,16 @@ export default function App() {
     placeDestMarker(coords);
     flyTo(coords);
     speak(`${s.place_name}`);
+    setQuery(s.place_name);
   }
 
   /* ---------- Origin from device + center button ---------- */
   function setOriginFromDevice() {
-    if (!("geolocation" in navigator)) return alert("Geolocation not supported");
+    if (!("geolocation" in navigator)) return showError("Geolocalización no soportada");
+    setLoading(true);
     navigator.geolocation.getCurrentPosition(
       (p) => {
+        setLoading(false);
         const coords = [p.coords.longitude, p.coords.latitude];
         setOrigin(coords);
         placeOriginMarker(coords);
@@ -294,17 +330,24 @@ export default function App() {
         speak("Ubicación actual centrada");
       },
       (err) => {
+        setLoading(false);
         console.warn("origin position error", err);
-        alert("No se pudo obtener ubicación (permiso denegado o timeout).");
+        showError("No se pudo obtener ubicación.");
       },
       { enableHighAccuracy: true, maximumAge: 5_000, timeout: 8000 }
     );
   }
 
+  function showError(msg) {
+    setErrorMsg(msg);
+    setTimeout(() => setErrorMsg(null), 4000);
+  }
+
   /* ---------- Plan Route (Mapbox Directions API - geojson) ---------- */
   async function planRoute() {
-    if (!origin || !dest) return alert("Por favor, seleccione origen y destino.");
+    if (!origin || !dest) return showError("Seleccione origen y destino.");
     removeRouteLayer();
+    setLoading(true);
 
     const from = `${origin[0]},${origin[1]}`;
     const to = `${dest[0]},${dest[1]}`;
@@ -312,8 +355,9 @@ export default function App() {
     try {
       const res = await fetch(url);
       const json = await res.json();
+      setLoading(false);
       if (!json.routes || json.routes.length === 0) {
-        alert("No se encontró ruta.");
+        showError("No se encontró ruta.");
         return;
       }
       const r = json.routes[0];
@@ -328,12 +372,13 @@ export default function App() {
       // Fit bounds nicely
       const coords = r.geometry.coordinates;
       const bounds = coords.reduce((b, c) => b.extend(c), new mapboxgl.LngLatBounds(coords[0], coords[0]));
-      mapRef.current.fitBounds(bounds, { padding: 80, duration: 900 });
+      mapRef.current.fitBounds(bounds, { padding: 100, duration: 1000 });
 
-      speak("Ruta planificada. Presione iniciar para comenzar la navegación.");
+      speak("Ruta planificada. Iniciar navegación.");
     } catch (err) {
+      setLoading(false);
       console.error("planRoute error", err);
-      alert("Error al planificar la ruta.");
+      showError("Error al planificar la ruta.");
     }
   }
 
@@ -354,9 +399,9 @@ export default function App() {
     // Optionally lock screen orientation (best-effort)
     try {
       if (screen.orientation && screen.orientation.lock) {
-        screen.orientation.lock("portrait").catch(() => {});
+        screen.orientation.lock("portrait").catch(() => { });
       }
-    } catch (e) {}
+    } catch (e) { }
 
     setNavigating(true);
     // Clear previous watch
@@ -370,11 +415,20 @@ export default function App() {
       async (pos) => {
         const lng = pos.coords.longitude;
         const lat = pos.coords.latitude;
+        const heading = pos.coords.heading; // Get heading if available
+
         placeUserMarker([lng, lat]);
 
         if (following && isMobile) {
-          // center on user for mobile nav
-          flyTo([lng, lat], 15, { animate: true });
+          // center on user for mobile nav with smooth transition
+          // Use easeTo for smoother continuous updates than flyTo
+          mapRef.current?.easeTo({
+            center: [lng, lat],
+            bearing: heading || 0, // Rotate map with heading
+            pitch: 60, // Tilt for 3D nav view
+            duration: 1000,
+            easing: (t) => t, // Linear easing for continuous updates
+          });
         }
 
         // Step progression: check distance to current step maneuver
@@ -384,7 +438,7 @@ export default function App() {
             const [tLng, tLat] = step.maneuver.location;
             const meters = haversineMeters(lat, lng, tLat, tLng);
             // when close, advance and announce
-            if (meters < 25 && currentStep < steps.length - 1) {
+            if (meters < 30 && currentStep < steps.length - 1) { // Increased threshold slightly
               setCurrentStep((i) => {
                 const nextIndex = i + 1;
                 const nextStep = steps[nextIndex];
@@ -402,12 +456,13 @@ export default function App() {
             const d = haversineMeters(lat, lng, c[1], c[0]);
             return d < min ? d : min;
           }, Infinity);
-          if (minMeters > 40) {
+          if (minMeters > 50) { // Increased tolerance
             // off-route: request new route from current position to dest
             try {
               const newOrigin = [lng, lat];
               setOrigin(newOrigin);
               placeOriginMarker(newOrigin);
+              speak("Recalculando ruta...");
 
               // Re-plan route
               const from = `${newOrigin[0]},${newOrigin[1]}`;
@@ -422,7 +477,6 @@ export default function App() {
                 const newSteps = (rJ.routes[0].legs && rJ.routes[0].legs[0] && rJ.routes[0].legs[0].steps) || [];
                 setSteps(newSteps);
                 setCurrentStep(0);
-                speak("Se detectó desvío. Recalculando ruta.");
               }
             } catch (err) {
               console.warn("replan error", err);
@@ -432,10 +486,10 @@ export default function App() {
       },
       (err) => {
         console.error("watchPosition error", err);
-        alert("Error leyendo ubicación. Verifique permisos.");
+        showError("Error leyendo ubicación.");
         stopNavigation();
       },
-      { enableHighAccuracy: true, maximumAge: 2000, timeout: 8000 }
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 } // stricter settings for nav
     );
 
     watchIdRef.current = id;
@@ -447,14 +501,14 @@ export default function App() {
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
       }
-    } catch (e) {}
+    } catch (e) { }
     // release wake lock
     try {
       if (wakeLockRef.current) {
         wakeLockRef.current.release();
         wakeLockRef.current = null;
       }
-    } catch (e) {}
+    } catch (e) { }
     setNavigating(false);
     speak("Navegación detenida");
   }
@@ -524,19 +578,31 @@ export default function App() {
 
   /* ---------- Render ---------- */
   return (
-    <div className="w-screen h-screen relative bg-gradient-to-br from-blue-900 via-indigo-900 to-violet-900 text-white overflow-hidden">
+    <div className="w-screen h-screen relative bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900 text-white overflow-hidden font-sans selection:bg-cyan-500/30">
       {/* pulse keyframes */}
-      <style>{`@keyframes hmPulse {0%{transform:scale(0.95);opacity:1}100%{transform:scale(1.2);opacity:0.75}}`}</style>
+      <style>{`
+        @keyframes hmPulse {0%{transform:scale(0.95);opacity:1;box-shadow:0 0 0 0 rgba(0,229,255,0.7)}70%{transform:scale(1);opacity:1;box-shadow:0 0 0 10px rgba(0,229,255,0)}100%{transform:scale(0.95);opacity:1;box-shadow:0 0 0 0 rgba(0,229,255,0)}}
+        .glass-panel { background: rgba(255, 255, 255, 0.08); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); border: 1px solid rgba(255, 255, 255, 0.12); box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.36); }
+        .glass-input { background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .glass-btn { background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.1); transition: all 0.2s ease; }
+        .glass-btn:hover { background: rgba(255, 255, 255, 0.2); transform: translateY(-1px); }
+        .glass-btn:active { transform: translateY(0); }
+      `}</style>
 
       {/* Map Container */}
       <div ref={mapContainer} className="absolute inset-0 z-0" />
 
       {/* Top glass bar */}
-      <motion.div initial={{ y: -60, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={IOS_SPRING} className="absolute top-5 left-1/2 -translate-x-1/2 z-50 w-[92%] md:w-[900px]">
-        <div className="backdrop-blur-2xl bg-white/8 border border-white/20 rounded-3xl p-3 shadow-2xl">
+      <motion.div
+        initial={{ y: -100, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ ...IOS_SPRING, delay: 0.2 }}
+        className="absolute top-4 left-1/2 -translate-x-1/2 z-50 w-[94%] md:w-[600px]"
+      >
+        <div className="glass-panel rounded-3xl p-3">
           <div className="flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-white/6" aria-hidden>
-              <Search className="w-5 h-5 text-white/90" />
+            <div className="p-2.5 rounded-xl bg-white/5 text-cyan-400">
+              <Search className="w-5 h-5" />
             </div>
 
             <div className="flex-1 relative">
@@ -545,15 +611,23 @@ export default function App() {
                 value={query}
                 onChange={(e) => { setQuery(e.target.value); scheduleSuggest(e.target.value); }}
                 onKeyDown={onInputKeyDown}
-                placeholder="Buscar destino (Colombia) o dirección..."
-                className="w-full bg-transparent outline-none placeholder-white/60 text-white p-3 rounded-xl"
+                placeholder="¿A dónde vamos?"
+                className="w-full bg-transparent outline-none placeholder-white/40 text-white text-lg font-medium p-2"
                 onFocus={() => query && scheduleSuggest(query)}
               />
 
               {/* Suggestions dropdown */}
               <AnimatePresence>
                 {showSuggestions && suggestions.length > 0 && (
-                  <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }} transition={{ duration: 0.2 }} className="absolute left-0 right-0 mt-2 bg-black/70 border border-white/10 rounded-xl max-h-56 overflow-auto z-60 p-1 backdrop-blur-xl" role="listbox" aria-label="Sugerencias">
+                  <motion.div
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                    transition={{ duration: 0.2 }}
+                    className="absolute top-full left-0 right-0 mt-3 glass-panel rounded-2xl overflow-hidden z-60 py-2"
+                    role="listbox"
+                    aria-label="Sugerencias"
+                  >
                     {suggestions.map((s, idx) => (
                       <div
                         role="option"
@@ -561,9 +635,10 @@ export default function App() {
                         key={s.id ?? `${s.place_name}-${idx}`}
                         onClick={() => pickSuggestion(s)}
                         onKeyDown={(e) => { if (e.key === "Enter") pickSuggestion(s); }}
-                        className="px-3 py-2 hover:bg-white/10 cursor-pointer rounded-md text-sm"
+                        className="px-4 py-3 hover:bg-white/10 cursor-pointer text-sm border-b border-white/5 last:border-0 flex items-center gap-3 transition-colors"
                       >
-                        {s.place_name}
+                        <MapPin className="w-4 h-4 text-cyan-400 shrink-0" />
+                        <span className="truncate">{s.place_name}</span>
                       </div>
                     ))}
                   </motion.div>
@@ -572,77 +647,110 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-2">
-              <button aria-label="Mi ubicación" title="Mi ubicación" onClick={setOriginFromDevice} className="bg-white/6 hover:bg-white/12 p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-400">
-                <MapPin className="w-5 h-5 text-white/90" />
+              <button aria-label="Mi ubicación" onClick={setOriginFromDevice} className="glass-btn p-2.5 rounded-xl text-white/90">
+                <MapPin className="w-5 h-5" />
               </button>
 
-              <button aria-label="Planear ruta" title="Planear ruta" onClick={planRoute} className="bg-blue-600 hover:bg-blue-700 px-3 py-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-300">
-                Plan
-              </button>
-
-              {!navigating ? (
-                <button aria-label="Iniciar navegación" title="Iniciar navegación" onClick={startNavigation} className="bg-green-600 hover:bg-green-700 px-3 py-2 rounded-md focus:outline-none focus:ring-2 focus:ring-green-300">
-                  <Play className="w-4 h-4" />
+              {/* Action Buttons Group */}
+              <div className="flex items-center gap-1 bg-white/5 rounded-xl p-1 border border-white/10">
+                <button
+                  aria-label="Planear ruta"
+                  onClick={planRoute}
+                  className="p-2 rounded-lg hover:bg-white/10 text-blue-400 transition-colors"
+                >
+                  <Navigation className="w-5 h-5" />
                 </button>
-              ) : (
-                <button aria-label="Detener navegación" title="Detener navegación" onClick={stopNavigation} className="bg-red-600 hover:bg-red-700 px-3 py-2 rounded-md focus:outline-none focus:ring-2 focus:ring-red-300">
-                  <StopCircle className="w-4 h-4" />
-                </button>
-              )}
 
-              <button aria-label="Limpiar" title="Limpiar" onClick={clearAll} className="bg-white/6 hover:bg-white/12 p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-white/20">
-                <X className="w-5 h-5 text-white/90" />
+                {!navigating ? (
+                  <button
+                    aria-label="Iniciar navegación"
+                    onClick={startNavigation}
+                    className="p-2 rounded-lg hover:bg-white/10 text-emerald-400 transition-colors"
+                  >
+                    <Play className="w-5 h-5" />
+                  </button>
+                ) : (
+                  <button
+                    aria-label="Detener navegación"
+                    onClick={stopNavigation}
+                    className="p-2 rounded-lg hover:bg-white/10 text-rose-400 transition-colors"
+                  >
+                    <StopCircle className="w-5 h-5" />
+                  </button>
+                )}
+              </div>
+
+              <button aria-label="Limpiar" onClick={clearAll} className="glass-btn p-2.5 rounded-xl text-white/60 hover:text-white">
+                <X className="w-5 h-5" />
               </button>
             </div>
           </div>
 
           {/* route summary small */}
-          {route && (
-            <div className="mt-3 text-sm text-white/80 flex items-center justify-between">
-              <div>Distance: <strong>{Math.round((route?.coordinates?.reduce((acc, c, i, arr) => {
-                if (i === 0) return 0;
-                const prev = arr[i - 1];
-                return acc + haversineMeters(prev[1], prev[0], c[1], c[0]);
-              }, 0)) || 0)} m</strong></div>
-              <div>ETA: <strong>—</strong></div>
-            </div>
-          )}
+          <AnimatePresence>
+            {route && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="overflow-hidden"
+              >
+                <div className="mt-3 pt-3 border-t border-white/10 flex items-center justify-between text-sm px-1">
+                  <div className="flex items-center gap-2 text-white/80">
+                    <span className="text-cyan-400 font-bold text-lg">
+                      {Math.round((route?.coordinates?.reduce((acc, c, i, arr) => {
+                        if (i === 0) return 0;
+                        const prev = arr[i - 1];
+                        return acc + haversineMeters(prev[1], prev[0], c[1], c[0]);
+                      }, 0)) / 1000 || 0).toFixed(1)}
+                    </span>
+                    <span className="text-xs uppercase tracking-wider font-medium">km</span>
+                  </div>
+                  <div className="text-white/60 text-xs">Tiempo estimado: -- min</div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </motion.div>
 
-      {/* Center locate button (bottom-center) */}
+      {/* Center locate button (bottom-right) */}
       <motion.button
         aria-label="Centrar en mi ubicación"
-        title="Centrar en mi ubicación"
-        initial={{ opacity: 0, scale: 0.9, y: 30 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        transition={{ duration: 0.35 }}
+        initial={{ opacity: 0, scale: 0.8 }}
+        animate={{ opacity: 1, scale: 1 }}
+        whileTap={{ scale: 0.9 }}
         onClick={() => {
           if (!origin) setOriginFromDevice();
-          else flyTo(origin, 15);
+          else flyTo(origin, 16);
         }}
-        className="absolute bottom-28 left-1/2 -translate-x-1/2 z-50 bg-white/12 backdrop-blur-md p-3 rounded-full shadow-xl focus:outline-none focus:ring-2 focus:ring-cyan-400"
+        className="absolute bottom-32 right-5 z-40 glass-panel p-3.5 rounded-full text-cyan-400"
       >
-        <Navigation className="w-6 h-6 text-white/90" />
+        <Navigation className="w-6 h-6" />
       </motion.button>
 
       {/* Live View AR toggle (bottom-left) */}
       <motion.button
         aria-label="Live View"
-        title="Live View AR"
-        initial={{ opacity: 0, x: -10 }}
+        initial={{ opacity: 0, x: -20 }}
         animate={{ opacity: 1, x: 0 }}
-        transition={{ duration: 0.35 }}
+        whileTap={{ scale: 0.9 }}
         onClick={() => startLiveView()}
-        className="absolute bottom-6 left-6 z-50 bg-white/10 backdrop-blur-md p-3 rounded-2xl shadow-lg focus:outline-none focus:ring-2 focus:ring-white/30"
+        className="absolute bottom-8 left-5 z-40 glass-panel p-3.5 rounded-2xl flex items-center gap-2"
       >
-        <Camera className="w-5 h-5 text-white/90" />
+        <Camera className="w-5 h-5 text-purple-400" />
+        <span className="text-sm font-medium hidden md:block">Live View</span>
       </motion.button>
 
       {/* AR / Live View overlay */}
       <AnimatePresence>
         {liveView && cameraStream && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }} className="absolute inset-0 z-60">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-[60] bg-black"
+          >
             <video
               id="hm-camera"
               autoPlay
@@ -652,18 +760,26 @@ export default function App() {
                 if (!v) return;
                 if (v.srcObject !== cameraStream) v.srcObject = cameraStream;
               }}
-              className="w-full h-full object-cover"
-              aria-hidden
+              className="w-full h-full object-cover opacity-80"
             />
 
-            {/* simple HUD for next instruction */}
-            <div className="absolute top-16 left-1/2 -translate-x-1/2 bg-white/10 backdrop-blur-lg px-4 py-2 rounded-2xl text-white">
-              <div className="text-sm">{steps && steps[currentStep] ? steps[currentStep].maneuver?.instruction : "Sigue la ruta"}</div>
+            <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-transparent to-black/60 pointer-events-none" />
+
+            {/* HUD */}
+            <div className="absolute top-8 left-0 right-0 flex justify-center pointer-events-auto">
+              <div className="glass-panel px-6 py-3 rounded-full flex items-center gap-3">
+                <Navigation className="w-5 h-5 text-cyan-400 animate-pulse" />
+                <span className="font-medium text-lg">
+                  {steps && steps[currentStep] ? steps[currentStep].maneuver?.instruction : "Buscando ruta..."}
+                </span>
+              </div>
             </div>
 
-            {/* close button */}
-            <button onClick={stopLiveView} aria-label="Cerrar Live View" className="absolute top-6 right-6 bg-white/10 p-3 rounded-full">
-              ✕
+            <button
+              onClick={stopLiveView}
+              className="absolute top-8 right-8 glass-btn p-3 rounded-full text-white/80 hover:text-white pointer-events-auto"
+            >
+              <X className="w-6 h-6" />
             </button>
           </motion.div>
         )}
@@ -672,18 +788,70 @@ export default function App() {
       {/* Bottom turn-by-turn list */}
       <AnimatePresence>
         {steps && steps.length > 0 && (
-          <motion.div initial={{ y: 120, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 120, opacity: 0 }} transition={IOS_SPRING} className="absolute bottom-5 left-1/2 -translate-x-1/2 z-50 w-[92%] md:w-[800px]">
-            <div className="backdrop-blur-2xl bg-white/6 border border-white/10 rounded-2xl p-3 shadow-xl max-h-48 overflow-auto">
-              <div className="text-sm text-white/80 mb-2">Indicaciones</div>
+          <motion.div
+            initial={{ y: 200, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 200, opacity: 0 }}
+            transition={IOS_SPRING}
+            className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 w-[94%] md:w-[700px]"
+          >
+            <div className="glass-panel rounded-3xl p-4 max-h-[30vh] overflow-y-auto no-scrollbar">
+              <div className="flex items-center justify-between mb-3 px-1">
+                <span className="text-xs font-bold uppercase tracking-widest text-white/50">Próximos pasos</span>
+                <span className="text-xs text-cyan-400 font-medium">{steps.length} pasos</span>
+              </div>
               <div className="space-y-2">
                 {steps.map((s, i) => (
-                  <div key={i} className={`p-2 rounded-md ${i === currentStep ? "bg-white/10 text-amber-200" : "text-white/80"}`}>
-                    <div className="text-xs">{Math.round(s.distance)} m</div>
-                    <div>{s.maneuver?.instruction}</div>
+                  <div
+                    key={i}
+                    className={`p-3 rounded-xl flex items-start gap-3 transition-all ${i === currentStep
+                      ? "bg-gradient-to-r from-cyan-500/20 to-blue-500/20 border border-cyan-500/30 shadow-lg shadow-cyan-900/20"
+                      : "hover:bg-white/5 border border-transparent"
+                      }`}
+                  >
+                    <div className={`mt-0.5 ${i === currentStep ? "text-cyan-400" : "text-white/40"}`}>
+                      {i === currentStep ? <Navigation className="w-5 h-5" /> : <div className="w-5 h-5 rounded-full border-2 border-current opacity-50" />}
+                    </div>
+                    <div className="flex-1">
+                      <div className={`text-sm font-medium leading-snug ${i === currentStep ? "text-white" : "text-white/70"}`}>
+                        {s.maneuver?.instruction}
+                      </div>
+                      <div className="text-xs text-white/40 mt-1 font-mono">
+                        {Math.round(s.distance)} m
+                      </div>
+                    </div>
                   </div>
                 ))}
               </div>
             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Error Toast */}
+      <AnimatePresence>
+        {errorMsg && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="absolute top-24 left-1/2 -translate-x-1/2 z-[70] bg-red-500/90 backdrop-blur-md text-white px-4 py-2 rounded-full shadow-lg text-sm font-medium"
+          >
+            {errorMsg}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Loading Indicator */}
+      <AnimatePresence>
+        {loading && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-[80] bg-black/20 backdrop-blur-sm flex items-center justify-center"
+          >
+            <div className="w-12 h-12 border-4 border-cyan-400 border-t-transparent rounded-full animate-spin" />
           </motion.div>
         )}
       </AnimatePresence>

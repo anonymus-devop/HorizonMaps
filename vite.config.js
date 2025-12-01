@@ -1,11 +1,20 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
+import electron from 'vite-plugin-electron/simple';
 
 export default defineConfig({
-  base: "/HorizonMaps/", // 👈 importante para GitHub Pages
+  base: "./", // Changed from /HorizonMaps/ for Electron compatibility
   plugins: [
     react(),
+    electron({
+      main: {
+        entry: 'electron/main.js',
+      },
+      preload: {
+        input: 'electron/preload.js',
+      },
+    }),
     VitePWA({
       registerType: "autoUpdate",
       includeAssets: ["favicon.svg", "robots.txt", "apple-touch-icon.png"],

@@ -1,8 +1,14 @@
 # Node
 node_modules/
 dist/
+dist-electron/
 .env
 .DS_Store
+
+# Build outputs
+release/
+build/
+*.log
 
 # Logs
 npm-debug.log*
