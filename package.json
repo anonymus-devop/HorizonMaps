@@ -15,10 +15,10 @@
     "@capacitor/android": "^7.4.4",
     "@capacitor/cli": "^7.4.4",
     "@capacitor/core": "^7.4.4",
+    "@turf/turf": "^7.3.5",
     "axios": "^1.13.2",
-    "framer-motion": "^12.23.24",
-    "lucide-react": "^0.553.0",
-    "mapbox-gl": "^3.16.0",
+    "mapbox-gl": "^3.22.0",
+    "raf": "^3.4.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-icons": "^5.5.0"
@@ -28,12 +28,14 @@
     "autoprefixer": "^10.4.22",
     "electron": "^39.2.4",
     "electron-builder": "^24.9.1",
+    "framer-motion": "^12.38.0",
+    "lucide-react": "^1.8.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.18",
     "vite": "^7.2.4",
     "vite-plugin-electron": "^0.28.0",
     "vite-plugin-electron-renderer": "^0.14.5",
-    "vite-plugin-pwa": "^1.1.0"
+    "vite-plugin-pwa": "^1.2.0"
   },
   "build": {
     "appId": "com.horizonmaps.app",
