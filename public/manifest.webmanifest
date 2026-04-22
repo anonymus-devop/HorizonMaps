@@ -1,24 +1,27 @@
 {
-  "name": "HorizonMaps",
-  "short_name": "HMaps",
-  "description": "AI-powered navigation with Liquid Glass UI.",
-  "start_url": "https://anonymus-devop.github.io/HorizonMaps/",
+  "name": "Shine Maps",
+  "short_name": "Shine Maps",
+  "description": "Navegación GPS inteligente para Colombia",
+  "start_url": "/",
   "display": "standalone",
-  "background_color": "#000000",
-  "theme_color": "#000000",
-  "lang": "en",
-  "scope": "./",
+  "background_color": "#0f172a",
+  "theme_color": "#0ea5e9",
   "orientation": "portrait",
+  "scope": "/",
+  "lang": "es-CO",
   "icons": [
     {
-      "src": "icons/icon-192.png",
+      "src": "/icon-192.png",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     },
     {
-      "src": "icons/icon-512.png",
+      "src": "/icon-512.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     }
-  ]
+  ],
+  "categories": ["navigation", "travel"]
 }
