@@ -2,7 +2,7 @@
   "name": "Shine Maps",
   "short_name": "Shine Maps",
   "description": "Navegación GPS inteligente para Colombia",
-  "start_url": "/",
+  "start_url": "https://anonymus-devop.github.io/HorizonMaps/",
   "display": "standalone",
   "background_color": "#0f172a",
   "theme_color": "#0ea5e9",
