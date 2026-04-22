@@ -1,9 +1,8 @@
+@import './liquid-glass.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-/* Importar sistema Liquid Glass */
-@import './liquid-glass.css';
 
 @layer base {
   :root {
@@ -114,7 +113,6 @@
   }
 }
 
-/* Mapbox customizations */
 .mapboxgl-ctrl-top-right {
   top: 80px !important;
 }
